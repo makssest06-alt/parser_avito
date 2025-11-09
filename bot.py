@@ -1,5 +1,6 @@
 import logging
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from config import BOT_TOKEN, ADMIN_IDS
 
 # Включим логирование
@@ -13,9 +14,23 @@ logger = logging.getLogger(__name__)
 async def start(update, context):
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
-        await update.message.reply_text("Привет, администратор!")
+        # Клавиатура для администратора
+        admin_keyboard = [['Добавить прокси']]
+        reply_markup = ReplyKeyboardMarkup(admin_keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "Привет, администратор!",
+            reply_markup=reply_markup
+        )
     else:
-        await update.message.reply_text("Привет, пользователь!")
+        # Клавиатура для обычного пользователя
+        user_keyboard = [
+            ['Посмотреть свою подписку', 'Посмотреть свою ссылку']
+        ]
+        reply_markup = ReplyKeyboardMarkup(user_keyboard, resize_keyboard=True)
+        await update.message.reply_text(
+            "Привет! Я парсер Авито. Выведу тебе новые объявления быстрее всего!",
+            reply_markup=reply_markup
+        )
 
 # Команда для получения ID пользователя
 async def get_id(update, context):
@@ -34,9 +49,21 @@ async def admin_command(update, context):
 async def help_command(update, context):
     await update.message.reply_text("Это помощь для всех пользователей!")
 
-# Обработчик текстовых сообщений
-async def echo(update, context):
-    await update.message.reply_text("Я получил ваше сообщение: " + update.message.text)
+# Обработчик текстовых сообщений (для кнопок)
+async def handle_buttons(update, context):
+    user_id = update.effective_user.id
+    text = update.message.text
+    
+    if user_id in ADMIN_IDS:
+        # Обработка кнопок администратора
+        if text == 'Добавить прокси':
+            await update.message.reply_text("Функция добавления прокси будет реализована позже.")
+    else:
+        # Обработка кнопок пользователя
+        if text == 'Посмотреть свою подписку':
+            await update.message.reply_text("Информация о подписке будет доступна позже.")
+        elif text == 'Посмотреть свою ссылку':
+            await update.message.reply_text("Ваша ссылка будет отображена позже.")
 
 def main():
     # Создаем приложение
@@ -48,8 +75,8 @@ def main():
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("get_id", get_id))
     
-    # Обработчик текстовых сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    # Обработчик текстовых сообщений (включая нажатия кнопок)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
     # Запускаем бота
     application.run_polling()
