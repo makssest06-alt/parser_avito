@@ -18,12 +18,12 @@ bot = telebot.TeleBot(BOT_TOKEN)
 def send_welcome(message):
     user_id = message.from_user.id
     if user_id in ADMIN_IDS:
-        # Создаем клавиатуру для администратора
-        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        markup.add('Добавить прокси')
+        # Создаем клавиатуру выбора режима для администратора
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add('Админ', 'Пользователь')
         bot.send_message(
             message.chat.id,
-            "Привет, администратор!",
+            "Привет, администратор! Выберите режим работы:",
             reply_markup=markup
         )
     else:
@@ -63,8 +63,39 @@ def handle_all_messages(message):
     text = message.text
     
     if user_id in ADMIN_IDS:
-        if text == 'Добавить прокси':
+        # Обработка выбора режима администратором
+        if text == 'Админ':
+            markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+            markup.add('Добавить прокси', 'Вернуться к выбору режима')
+            bot.send_message(
+                message.chat.id,
+                "Вы вошли в режим администратора",
+                reply_markup=markup
+            )
+        elif text == 'Пользователь':
+            markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add('Посмотреть свою подписку', 'Посмотреть свою ссылку', 'Вернуться к выбору режима')
+            bot.send_message(
+                message.chat.id,
+                "Привет! Я парсер Авито. Выведу тебе новые объявления быстрее всего!",
+                reply_markup=markup
+            )
+        elif text == 'Вернуться к выбору режима':
+            markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add('Админ', 'Пользователь')
+            bot.send_message(
+                message.chat.id,
+                "Выберите режим работы:",
+                reply_markup=markup
+            )
+        # Обработка кнопок в режиме администратора
+        elif text == 'Добавить прокси':
             bot.reply_to(message, "Функция добавления прокси будет реализована позже.")
+        # Обработка кнопок в режиме пользователя
+        elif text == 'Посмотреть свою подписку':
+            bot.reply_to(message, "Информация о подписке будет доступна позже.")
+        elif text == 'Посмотреть свою ссылку':
+            bot.reply_to(message, "Ваша ссылка будет отображена позже.")
         else:
             bot.reply_to(message, "Неизвестная команда")
     else:
