@@ -1,6 +1,6 @@
 import logging
-from telegram.ext import Updater, CommandHandler, MessageHandler, filters
-from telegram import ReplyKeyboardMarkup
+import telebot
+from telebot.types import ReplyKeyboardMarkup
 from config import BOT_TOKEN, ADMIN_IDS
 
 # Включим логирование
@@ -10,82 +10,72 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Создаем экземпляр бота
+bot = telebot.TeleBot(BOT_TOKEN)
+
 # Команда старт для всех пользователей
-def start(update, context):
-    user_id = update.effective_user.id
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = message.from_user.id
     if user_id in ADMIN_IDS:
         # Клавиатура для администратора
-        admin_keyboard = [['Добавить прокси']]
-        reply_markup = ReplyKeyboardMarkup(admin_keyboard, resize_keyboard=True)
-        update.message.reply_text(
+        admin_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+        admin_keyboard.add('Добавить прокси')
+        bot.send_message(
+            message.chat.id,
             "Привет, администратор!",
-            reply_markup=reply_markup
+            reply_markup=admin_keyboard
         )
     else:
         # Клавиатура для обычного пользователя
-        user_keyboard = [
-            ['Посмотреть свою подписку', 'Посмотреть свою ссылку']
-        ]
-        reply_markup = ReplyKeyboardMarkup(user_keyboard, resize_keyboard=True)
-        update.message.reply_text(
+        user_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+        user_keyboard.add('Посмотреть свою подписку', 'Посмотреть свою ссылку')
+        bot.send_message(
+            message.chat.id,
             "Привет! Я парсер Авито. Выведу тебе новые объявления быстрее всего!",
-            reply_markup=reply_markup
+            reply_markup=user_keyboard
         )
 
 # Команда для получения ID пользователя
-def get_id(update, context):
-    user_id = update.effective_user.id
-    update.message.reply_text(f"Ваш ID: {user_id}")
+@bot.message_handler(commands=['get_id'])
+def get_id(message):
+    user_id = message.from_user.id
+    bot.send_message(message.chat.id, f"Ваш ID: {user_id}")
 
 # Команда только для администраторов
-def admin_command(update, context):
-    user_id = update.effective_user.id
+@bot.message_handler(commands=['admin'])
+def admin_command(message):
+    user_id = message.from_user.id
     if user_id in ADMIN_IDS:
-        update.message.reply_text("Это команда только для администраторов!")
+        bot.send_message(message.chat.id, "Это команда только для администраторов!")
     else:
-        update.message.reply_text("У вас нет прав для выполнения этой команды.")
+        bot.send_message(message.chat.id, "У вас нет прав для выполнения этой команды.")
 
 # Обычная команда для всех пользователей
-def help_command(update, context):
-    update.message.reply_text("Это помощь для всех пользователей!")
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    bot.send_message(message.chat.id, "Это помощь для всех пользователей!")
 
 # Обработчик текстовых сообщений (для кнопок)
-def handle_buttons(update, context):
-    user_id = update.effective_user.id
-    text = update.message.text
+@bot.message_handler(func=lambda message: True)
+def handle_buttons(message):
+    user_id = message.from_user.id
+    text = message.text
     
     if user_id in ADMIN_IDS:
         # Обработка кнопок администратора
         if text == 'Добавить прокси':
-            update.message.reply_text("Функция добавления прокси будет реализована позже.")
+            bot.send_message(message.chat.id, "Функция добавления прокси будет реализована позже.")
     else:
         # Обработка кнопок пользователя
         if text == 'Посмотреть свою подписку':
-            update.message.reply_text("Информация о подписке будет доступна позже.")
+            bot.send_message(message.chat.id, "Информация о подписке будет доступна позже.")
         elif text == 'Посмотреть свою ссылку':
-            update.message.reply_text("Ваша ссылка будет отображена позже.")
+            bot.send_message(message.chat.id, "Ваша ссылка будет отображена позже.")
 
 def main():
-    # Создаем Updater и передаем ему токен бота
-    updater = Updater(BOT_TOKEN)
-    
-    # Получаем диспетчер для регистрации обработчиков
-    dp = updater.dispatcher
-
-    # Добавляем обработчики команд
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("admin", admin_command))
-    dp.add_handler(CommandHandler("get_id", get_id))
-    
-    # Обработчик текстовых сообщений (включая нажатия кнопок)
-    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
-
     # Запускаем бота
-    updater.start_polling()
-    
-    # Запускаем бота до тех пор, пока пользователь не остановит его
-    updater.idle()
+    bot.infinity_polling()
 
 if __name__ == '__main__':
     main()
