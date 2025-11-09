@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from config import BOT_TOKEN, ADMIN_IDS
@@ -65,7 +66,7 @@ async def handle_buttons(update, context):
         elif text == 'Посмотреть свою ссылку':
             await update.message.reply_text("Ваша ссылка будет отображена позже.")
 
-def main():
+async def main():
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -79,7 +80,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
     # Запускаем бота
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
