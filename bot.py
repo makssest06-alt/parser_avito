@@ -1,5 +1,5 @@
 import logging
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, filters
 from telegram import ReplyKeyboardMarkup
 from config import BOT_TOKEN, ADMIN_IDS
 
@@ -67,7 +67,7 @@ def handle_buttons(update, context):
 
 def main():
     # Создаем Updater и передаем ему токен бота
-    updater = Updater(BOT_TOKEN, use_context=True)
+    updater = Updater(BOT_TOKEN)
     
     # Получаем диспетчер для регистрации обработчиков
     dp = updater.dispatcher
@@ -79,7 +79,7 @@ def main():
     dp.add_handler(CommandHandler("get_id", get_id))
     
     # Обработчик текстовых сообщений (включая нажатия кнопок)
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_buttons))
+    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
     # Запускаем бота
     updater.start_polling()
