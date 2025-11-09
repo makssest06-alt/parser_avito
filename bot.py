@@ -3,7 +3,7 @@ import telebot
 from telebot.types import ReplyKeyboardMarkup
 from config import BOT_TOKEN, ADMIN_IDS
 
-# Включим логирование
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -13,69 +13,69 @@ logger = logging.getLogger(__name__)
 # Создаем экземпляр бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Команда старт для всех пользователей
+# Обработчик команды /start
 @bot.message_handler(commands=['start'])
-def start(message):
+def send_welcome(message):
     user_id = message.from_user.id
     if user_id in ADMIN_IDS:
-        # Клавиатура для администратора
-        admin_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-        admin_keyboard.add('Добавить прокси')
+        # Создаем клавиатуру для администратора
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        markup.add('Добавить прокси')
         bot.send_message(
             message.chat.id,
             "Привет, администратор!",
-            reply_markup=admin_keyboard
+            reply_markup=markup
         )
     else:
-        # Клавиатура для обычного пользователя
-        user_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-        user_keyboard.add('Посмотреть свою подписку', 'Посмотреть свою ссылку')
+        # Создаем клавиатуру для обычного пользователя
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add('Посмотреть свою подписку', 'Посмотреть свою ссылку')
         bot.send_message(
             message.chat.id,
             "Привет! Я парсер Авито. Выведу тебе новые объявления быстрее всего!",
-            reply_markup=user_keyboard
+            reply_markup=markup
         )
 
-# Команда для получения ID пользователя
+# Обработчик команды /get_id
 @bot.message_handler(commands=['get_id'])
-def get_id(message):
+def get_user_id(message):
     user_id = message.from_user.id
-    bot.send_message(message.chat.id, f"Ваш ID: {user_id}")
+    bot.reply_to(message, f"Ваш ID: {user_id}")
 
-# Команда только для администраторов
+# Обработчик команды /admin
 @bot.message_handler(commands=['admin'])
 def admin_command(message):
     user_id = message.from_user.id
     if user_id in ADMIN_IDS:
-        bot.send_message(message.chat.id, "Это команда только для администраторов!")
+        bot.reply_to(message, "Это команда только для администраторов!")
     else:
-        bot.send_message(message.chat.id, "У вас нет прав для выполнения этой команды.")
+        bot.reply_to(message, "У вас нет прав для выполнения этой команды.")
 
-# Обычная команда для всех пользователей
+# Обработчик команды /help
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    bot.send_message(message.chat.id, "Это помощь для всех пользователей!")
+    bot.reply_to(message, "Это помощь для всех пользователей!")
 
-# Обработчик текстовых сообщений (для кнопок)
+# Обработчик текстовых сообщений (кнопки)
 @bot.message_handler(func=lambda message: True)
-def handle_buttons(message):
+def handle_all_messages(message):
     user_id = message.from_user.id
     text = message.text
     
     if user_id in ADMIN_IDS:
-        # Обработка кнопок администратора
         if text == 'Добавить прокси':
-            bot.send_message(message.chat.id, "Функция добавления прокси будет реализована позже.")
+            bot.reply_to(message, "Функция добавления прокси будет реализована позже.")
+        else:
+            bot.reply_to(message, "Неизвестная команда")
     else:
-        # Обработка кнопок пользователя
         if text == 'Посмотреть свою подписку':
-            bot.send_message(message.chat.id, "Информация о подписке будет доступна позже.")
+            bot.reply_to(message, "Информация о подписке будет доступна позже.")
         elif text == 'Посмотреть свою ссылку':
-            bot.send_message(message.chat.id, "Ваша ссылка будет отображена позже.")
+            bot.reply_to(message, "Ваша ссылка будет отображена позже.")
+        else:
+            bot.reply_to(message, "Неизвестная команда")
 
-def main():
-    # Запускаем бота
-    bot.infinity_polling()
-
+# Запуск бота
 if __name__ == '__main__':
-    main()
+    print("Бот запущен...")
+    bot.infinity_polling()
