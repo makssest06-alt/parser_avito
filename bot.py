@@ -508,12 +508,29 @@ def run_test_parser(user_id, config, chat_id):
         
         tg_handler.send_to_tg = track_send_to_tg
         
+        # Создаем событие остановки
+        stop_event = threading.Event()
+        
         # Запускаем парсер
-        parser = AvitoParse(config, stop_event=threading.Event())
+        parser = AvitoParse(config, stop_event=stop_event)
         parser.tg_handler = tg_handler
         
-        # Запускаем парсинг
-        parser.parse()
+        # Запускаем парсинг в отдельном потоке
+        def parse_with_stop():
+            parser.parse()
+            # После завершения парсинга устанавливаем событие остановки
+            stop_event.set()
+        
+        parse_thread = threading.Thread(target=parse_with_stop)
+        parse_thread.start()
+        
+        # Ждем завершения парсинга или таймаут
+        parse_thread.join(timeout=120)  # 2 минуты таймаут
+        
+        # Если поток еще жив, останавливаем
+        if parse_thread.is_alive():
+            stop_event.set()
+            parse_thread.join(timeout=10)
         
         # Формируем сообщение о результатах
         if found_ads:
@@ -601,7 +618,7 @@ def start_test_parsing(message):
         ignore_reserv=test_config['ignore_reserv'],
         ignore_promotion=test_config['ignore_promotion'],
         parse_views=test_config['parse_views'],
-        one_time_start=True,
+        one_time_start=False,  # Изменено на False для отправки уведомлений
         count=1,
         pause_between_links=2,
         max_count_of_retry=3,

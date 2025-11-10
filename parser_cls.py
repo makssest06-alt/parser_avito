@@ -197,7 +197,7 @@ class AvitoParse:
 
                 filter_ads = self.filter_ads(ads=ads)
 
-                if self.tg_handler and not self.config.one_time_start:
+                if self.tg_handler:
                     self._send_to_tg(ads=filter_ads)
 
                 filter_ads = self.parse_views(ads=filter_ads)
