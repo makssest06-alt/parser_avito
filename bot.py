@@ -113,19 +113,23 @@ def handle_all_messages(message):
             # Админ в режиме пользователя
             subscription = db.get_user_subscription(user_id)
             if subscription:
+                # Пользователь с активной подпиской
                 markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
                 markup.add('Добавить ссылку', 'Мои ссылки', 'Моя подписка', 'Вернуться к выбору режима')
                 bot.send_message(
                     message.chat.id,
-                    "Режим пользователя",
+                    f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
+                    "Я парсер Авито. Выведу тебе новые объявления быстрее всего!",
                     reply_markup=markup
                 )
             else:
+                # Пользователь без подписки
                 markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
                 markup.add('Купить подписку', 'Информация', 'Вернуться к выбору режима')
                 bot.send_message(
                     message.chat.id,
-                    "Режим пользователя",
+                    "Привет! Я парсер Авито. Для использования бота нужна подписка.\n"
+                    "Выбери тариф и начни получать новые объявления первым!",
                     reply_markup=markup
                 )
         elif text == 'Вернуться к выбору режима':
@@ -143,6 +147,47 @@ def handle_all_messages(message):
         elif text == 'Пользователи':
             # TODO: Реализовать управление пользователями
             bot.reply_to(message, "Управление пользователями будет доступно позже.")
+        
+        # Обработка кнопок в режиме пользователя для администратора
+        elif text == 'Купить подписку':
+            show_subscription_plans(message)
+        elif text == 'Информация':
+            bot.reply_to(message, "Я парсер Авито. С моей помощью ты сможешь:\n"
+                                  "• Получать уведомления о новых объявлениях\n"
+                                  "• Мониторить до 100 ссылок одновременно\n"
+                                  "• Быть первым на самых выгодных предложениях!")
+        elif text == 'Моя подписка':
+            subscription = db.get_user_subscription(user_id)
+            if subscription:
+                bot.reply_to(message, f"Твоя подписка: {subscription['type']}\n"
+                                     f"Активна до: {subscription['end_date'][:10]}\n"
+                                     f"Статус: {'Активна' if subscription['is_active'] else 'Неактивна'}")
+            else:
+                bot.reply_to(message, "У тебя нет активной подписки. Нажми 'Купить подписку'")
+        elif text == 'Добавить ссылку':
+            subscription = db.get_user_subscription(user_id)
+            if subscription:
+                # Проверяем лимит ссылок
+                links = db.get_user_links(user_id)
+                plan_limit = SUBSCRIPTION_PLANS.get(subscription['type'], {}).get('links_limit', 0)
+                if len(links) >= plan_limit:
+                    bot.reply_to(message, f"Достигнут лимит ссылок ({plan_limit}). Увеличьте тариф.")
+                else:
+                    msg = bot.reply_to(message, "Пришли мне ссылку на Авито для мониторинга:")
+                    bot.register_next_step_handler(msg, process_avito_link)
+            else:
+                bot.reply_to(message, "Для добавления ссылки нужна активная подписка!")
+        elif text == 'Мои ссылки':
+            subscription = db.get_user_subscription(user_id)
+            if subscription:
+                links = db.get_user_links(user_id)
+                if links:
+                    links_text = "Твои ссылки:\n\n" + "\n".join([f"• {link[0]}" for link in links])
+                    bot.reply_to(message, links_text)
+                else:
+                    bot.reply_to(message, "У тебя пока нет добавленных ссылок.")
+            else:
+                bot.reply_to(message, "Для просмотра ссылок нужна активная подписка!")
         else:
             bot.reply_to(message, "Неизвестная команда")
     else:
