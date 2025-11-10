@@ -566,14 +566,14 @@ def start_test_parsing(message):
     # Создаем тестовую ссылку для проверки
     test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
     
-    # Создаем тестовые настройки парсера
+    # Создаем тестовые настройки парсера (убираем фильтр по гео)
     test_config = {
         'min_price': 1000,
         'max_price': 50000,
         'keys_word_white_list': ['iphone'],
         'keys_word_black_list': [],
         'seller_black_list': [],
-        'geo': 'Москва',
+        'geo': '',  # Пустая строка - без фильтра по городу
         'max_age': 86400,
         'ignore_reserv': True,
         'ignore_promotion': False,
@@ -617,7 +617,7 @@ def start_test_parsing(message):
         f"• Ссылка: {test_url}\n"
         f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
         f"• Ключевые слова: {', '.join(test_config['keys_word_white_list'])}\n"
-        f"• Город: {test_config['geo']}\n\n"
+        f"• Город: {'Любой (фильтр отключен)' if not test_config['geo'] else test_config['geo']}\n\n"
         "Результаты придут в этом чате в течение 1-2 минут.",
         parse_mode='Markdown'
     )
