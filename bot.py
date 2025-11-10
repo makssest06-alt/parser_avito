@@ -65,7 +65,7 @@ def send_welcome(message):
         if subscription:
             # Пользователь с активной подпиской
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Моя подписка')
+            markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
             bot.send_message(
                 message.chat.id,
                 f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
@@ -249,6 +249,11 @@ def handle_all_messages(message):
                 show_parser_settings(message)
             else:
                 bot.reply_to(message, "Для настройки парсера нужна активная подписка!")
+        elif text == 'Настройки прокси':
+            if subscription:
+                show_proxy_settings(message)
+            else:
+                bot.reply_to(message, "Для настройки прокси нужна активная подписка!")
         else:
             bot.reply_to(message, "Неизвестная команда")
 
@@ -363,6 +368,38 @@ def check_payment_status(user_id: int, payment_id: str, chat_id: int):
         bot.send_message(chat_id, "⏳ Платеж еще обрабатывается. Попробуйте проверить позже.")
     else:
         bot.send_message(chat_id, "❌ Платеж не найден или отменен.")
+
+def show_proxy_settings(message):
+    """Показывает настройки прокси"""
+    user_id = message.from_user.id
+    settings = db.get_parser_settings(user_id)
+    
+    if not settings:
+        settings = {
+            'proxy_string': '',
+            'proxy_change_url': ''
+        }
+    
+    settings_text = (
+        f"⚙️ *Текущие настройки прокси:*\n\n"
+        f"• Прокси: {settings['proxy_string'] or 'Не настроен'}\n"
+        f"• URL смены IP: {settings['proxy_change_url'] or 'Не настроен'}\n\n"
+        f"Используйте команды для изменения настроек:\n"
+        f"/set_proxy [прокси] - установить прокси\n"
+        f"/set_proxy_url [url] - установить URL смены IP\n\n"
+        f"Формат прокси: username:password@proxy.site:port\n"
+        f"Пример: user123:pass456@proxy.mobileproxy.space:10000"
+    )
+    
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add('Изменить настройки прокси', 'Вернуться в меню')
+    
+    bot.send_message(
+        message.chat.id,
+        settings_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
 
 # Фоновая проверка платежей
 def check_pending_payments():
@@ -584,6 +621,11 @@ def start_test_parsing(message):
     """Запускает тестовый парсинг для администратора"""
     user_id = message.from_user.id
     
+    # Получаем текущие настройки (включая прокси)
+    current_settings = db.get_parser_settings(user_id)
+    if not current_settings:
+        current_settings = {}
+    
     # Создаем тестовую ссылку для проверки
     test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
     
@@ -599,7 +641,9 @@ def start_test_parsing(message):
         'ignore_reserv': False,
         'ignore_promotion': False,
         'parse_views': False,
-        'tg_notifications': True
+        'tg_notifications': True,
+        'proxy_string': current_settings.get('proxy_string', ''),
+        'proxy_change_url': current_settings.get('proxy_change_url', '')
     }
     
     # Сохраняем тестовые настройки
@@ -621,6 +665,8 @@ def start_test_parsing(message):
         ignore_reserv=test_config['ignore_reserv'],
         ignore_promotion=test_config['ignore_promotion'],
         parse_views=test_config['parse_views'],
+        proxy_string=test_config['proxy_string'],
+        proxy_change_url=test_config['proxy_change_url'],
         one_time_start=False,  # Изменено на False для отправки уведомлений
         count=1,
         pause_between_links=2,

@@ -79,6 +79,8 @@ class Database:
                     ignore_promotion BOOLEAN DEFAULT FALSE,
                     parse_views BOOLEAN DEFAULT FALSE,
                     tg_notifications BOOLEAN DEFAULT TRUE,
+                    proxy_string TEXT,
+                    proxy_change_url TEXT,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
@@ -184,7 +186,7 @@ class Database:
             cursor.execute('''
                 SELECT min_price, max_price, keys_word_white_list, keys_word_black_list, 
                        seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, 
-                       parse_views, tg_notifications
+                       parse_views, tg_notifications, proxy_string, proxy_change_url
                 FROM parser_settings 
                 WHERE user_id = ?
             ''', (user_id,))
@@ -202,7 +204,9 @@ class Database:
                     'ignore_reserv': bool(result[7]),
                     'ignore_promotion': bool(result[8]),
                     'parse_views': bool(result[9]),
-                    'tg_notifications': bool(result[10])
+                    'tg_notifications': bool(result[10]),
+                    'proxy_string': result[11],
+                    'proxy_change_url': result[12]
                 }
             return None
 
@@ -216,8 +220,9 @@ class Database:
             cursor.execute('''
                 INSERT INTO parser_settings 
                 (user_id, min_price, max_price, keys_word_white_list, keys_word_black_list, 
-                 seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, parse_views, tg_notifications)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, parse_views, tg_notifications,
+                 proxy_string, proxy_change_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id,
                 settings.get('min_price', 0),
@@ -230,7 +235,9 @@ class Database:
                 settings.get('ignore_reserv', True),
                 settings.get('ignore_promotion', False),
                 settings.get('parse_views', False),
-                settings.get('tg_notifications', True)
+                settings.get('tg_notifications', True),
+                settings.get('proxy_string', ''),
+                settings.get('proxy_change_url', '')
             ))
             conn.commit()
 

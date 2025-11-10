@@ -114,6 +114,8 @@ class ParserService:
             ignore_reserv=settings['ignore_reserv'],
             ignore_promotion=settings['ignore_promotion'],
             parse_views=settings['parse_views'],
+            proxy_string=settings.get('proxy_string', ''),
+            proxy_change_url=settings.get('proxy_change_url', ''),
             one_time_start=True,
             count=1,
             pause_between_links=2,
