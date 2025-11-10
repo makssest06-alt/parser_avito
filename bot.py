@@ -1,9 +1,13 @@
 import logging
 import telebot
+import sqlite3
 from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS
 from database import Database
 from payment_service import payment_service
+from dto import AvitoConfig
+from parser_cls import AvitoParse
+from parser_service import UserTgHandler
 import threading
 import time
 
@@ -153,6 +157,9 @@ def handle_all_messages(message):
         elif text == 'Пользователи':
             # TODO: Реализовать управление пользователями
             bot.reply_to(message, "Управление пользователями будет доступно позже.")
+        elif text == 'Тест парсера':
+            # Запускаем тестовый парсинг для администратора
+            start_test_parsing(message)
         
         # Обработка кнопок в режиме пользователя для администратора
         elif text == 'Купить подписку':
@@ -419,6 +426,106 @@ def show_parser_settings(message):
         reply_markup=markup,
         parse_mode='Markdown'
     )
+
+def start_test_parsing(message):
+    """Запускает тестовый парсинг для администратора"""
+    user_id = message.from_user.id
+    
+    # Создаем тестовую ссылку для проверки
+    test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
+    
+    # Создаем тестовые настройки парсера
+    test_config = {
+        'min_price': 1000,
+        'max_price': 50000,
+        'keys_word_white_list': ['iphone'],
+        'keys_word_black_list': [],
+        'seller_black_list': [],
+        'geo': 'Москва',
+        'max_age': 86400,
+        'ignore_reserv': True,
+        'ignore_promotion': False,
+        'parse_views': False,
+        'tg_notifications': True
+    }
+    
+    # Сохраняем тестовые настройки
+    db.update_parser_settings(user_id, test_config)
+    
+    # Добавляем тестовую ссылку
+    db.add_user_link(user_id, test_url)
+    
+    # Создаем конфиг для парсера
+    config = AvitoConfig(
+        urls=[test_url],
+        min_price=test_config['min_price'],
+        max_price=test_config['max_price'],
+        keys_word_white_list=test_config['keys_word_white_list'],
+        keys_word_black_list=test_config['keys_word_black_list'],
+        seller_black_list=test_config['seller_black_list'],
+        geo=test_config['geo'],
+        max_age=test_config['max_age'],
+        ignore_reserv=test_config['ignore_reserv'],
+        ignore_promotion=test_config['ignore_promotion'],
+        parse_views=test_config['parse_views'],
+        one_time_start=True,
+        count=1,
+        pause_between_links=2,
+        max_count_of_retry=3,
+        save_xlsx=False
+    )
+    
+    # Запускаем парсинг в отдельном потоке
+    threading.Thread(target=run_test_parser, args=(user_id, config, message.chat.id), daemon=True).start()
+    
+    bot.send_message(
+        message.chat.id,
+        "🔍 *Запускаю тестовый парсинг...*\n\n"
+        "Тестовые параметры:\n"
+        f"• Ссылка: {test_url}\n"
+        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
+        f"• Ключевые слова: {', '.join(test_config['keys_word_white_list'])}\n"
+        f"• Город: {test_config['geo']}\n\n"
+        "Результаты придут в этом чате в течение 1-2 минут.",
+        parse_mode='Markdown'
+    )
+
+def run_test_parser(user_id, config, chat_id):
+    """Запускает парсер в отдельном потоке"""
+    try:
+        # Создаем обработчик для отправки уведомлений администратору
+        tg_handler = UserTgHandler(user_id, bot)
+        
+        # Запускаем парсер
+        parser = AvitoParse(config, stop_event=threading.Event())
+        parser.tg_handler = tg_handler
+        
+        # Запускаем парсинг
+        parser.parse()
+        
+        # Отправляем сообщение о завершении
+        bot.send_message(
+            chat_id,
+            "✅ *Тестовый парсинг завершен!*\n\n"
+            "Если вы получили уведомления о новых объявлениях - парсер работает корректно.\n"
+            "Тестовые данные были автоматически удалены.",
+            parse_mode='Markdown'
+        )
+        
+        # Удаляем тестовую ссылку
+        with sqlite3.connect(db.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM user_links WHERE user_id = ? AND avito_link = ?', 
+                          (user_id, config.urls[0]))
+            conn.commit()
+            
+    except Exception as e:
+        logger.error(f"Ошибка при тестовом парсинге: {e}")
+        bot.send_message(
+            chat_id,
+            f"❌ *Ошибка при тестовом парсинге:*\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
 
 # Запускаем фоновую проверку
 payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
