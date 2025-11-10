@@ -28,6 +28,9 @@ SUBSCRIPTION_PLANS = {
 # Словарь для отслеживания ожидающих платежей
 pending_payments = {}
 
+# Импортируем сервис парсера
+from parser_service import parser_service
+
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -55,7 +58,7 @@ def send_welcome(message):
         if subscription:
             # Пользователь с активной подпиской
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add('Добавить ссылку', 'Мои ссылки', 'Моя подписка')
+            markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Моя подписка')
             bot.send_message(
                 message.chat.id,
                 f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
@@ -230,6 +233,12 @@ def handle_all_messages(message):
                     bot.reply_to(message, "У тебя пока нет добавленных ссылок.")
             else:
                 bot.reply_to(message, "Для просмотра ссылок нужна активная подписка!")
+        
+        elif text == 'Настройки парсера':
+            if subscription:
+                show_parser_settings(message)
+            else:
+                bot.reply_to(message, "Для настройки парсера нужна активная подписка!")
         else:
             bot.reply_to(message, "Неизвестная команда")
 
@@ -359,6 +368,57 @@ def check_pending_payments():
         except Exception as e:
             logger.error(f"Ошибка в фоновой проверке платежей: {e}")
             time.sleep(60)
+
+def show_parser_settings(message):
+    """Показывает настройки парсера"""
+    user_id = message.from_user.id
+    settings = db.get_parser_settings(user_id)
+    
+    if not settings:
+        settings = {
+            'min_price': 0,
+            'max_price': 999999999,
+            'keys_word_white_list': [],
+            'keys_word_black_list': [],
+            'seller_black_list': [],
+            'geo': '',
+            'max_age': 86400,
+            'ignore_reserv': True,
+            'ignore_promotion': False,
+            'parse_views': False,
+            'tg_notifications': True
+        }
+        db.update_parser_settings(user_id, settings)
+    
+    settings_text = (
+        f"⚙️ *Текущие настройки парсера:*\n\n"
+        f"• Минимальная цена: {settings['min_price']} руб.\n"
+        f"• Максимальная цена: {settings['max_price']} руб.\n"
+        f"• Город: {settings['geo'] or 'Не указан'}\n"
+        f"• Макс. возраст: {settings['max_age']} сек.\n"
+        f"• Игнорировать резервы: {'Да' if settings['ignore_reserv'] else 'Нет'}\n"
+        f"• Игнорировать продвинутые: {'Да' if settings['ignore_promotion'] else 'Нет'}\n"
+        f"• Парсить просмотры: {'Да' if settings['parse_views'] else 'Нет'}\n"
+        f"• Уведомления в Telegram: {'Да' if settings['tg_notifications'] else 'Нет'}\n\n"
+        f"Используйте команды для изменения настроек:\n"
+        f"/set_min_price [цена] - установить мин. цену\n"
+        f"/set_max_price [цена] - установить макс. цену\n"
+        f"/set_geo [город] - установить город\n"
+        f"/set_max_age [секунды] - установить макс. возраст"
+    )
+    
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add('Изменить настройки', 'Вернуться в меню')
+    
+    bot.send_message(
+        message.chat.id,
+        settings_text,
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+# Запускаем сервис парсера при старте бота
+parser_service.start_monitoring()
 
 # Запускаем фоновую проверку
 payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
