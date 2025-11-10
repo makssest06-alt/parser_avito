@@ -113,7 +113,7 @@ def handle_all_messages(message):
         # Обработка выбора режима администратором
         if text == 'Админ':
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-            markup.add('Статистика', 'Пользователи', 'Вернуться к выбору режима')
+            markup.add('Статистика', 'Пользователи', 'Тест парсера', 'Вернуться к выбору режима')
             bot.send_message(
                 message.chat.id,
                 "Вы вошли в режим администратора",
@@ -157,9 +157,6 @@ def handle_all_messages(message):
         elif text == 'Пользователи':
             # TODO: Реализовать управление пользователями
             bot.reply_to(message, "Управление пользователей будет доступно позже.")
-        elif text == 'Тест парсера':
-            # Запускаем тестовый парсинг для администратора
-            start_test_parsing(message)
         elif text == 'Тест парсера':
             # Запускаем тестовый парсинг для администратора
             start_test_parsing(message)
