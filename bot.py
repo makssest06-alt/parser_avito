@@ -468,7 +468,7 @@ def start_test_parsing(message):
         ignore_reserv=test_config['ignore_reserv'],
         ignore_promotion=test_config['ignore_promotion'],
         parse_views=test_config['parse_views'],
-        one_time_start=True,
+        one_time_start=False,  # Изменено на False, чтобы отправлялись уведомления
         count=1,
         pause_between_links=2,
         max_count_of_retry=3,
@@ -483,9 +483,10 @@ def start_test_parsing(message):
         "🔍 *Запускаю тестовый парсинг...*\n\n"
         "Тестовые параметры:\n"
         f"• Ссылка: {test_url}\n"
-        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
-        f"• Ключевые слова: {', '.join(test_config['keys_word_white_list'])}\n"
-        f"• Город: {'Любой (фильтр отключен)' if not test_config['geo'] else test_config['geo']}\n\n"
+        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб. (все цены)\n"
+        f"• Ключевые слова: {'любые' if not test_config['keys_word_white_list'] else ', '.join(test_config['keys_word_white_list'])}\n"
+        f"• Город: {'Любой (фильтр отключен)' if not test_config['geo'] else test_config['geo']}\n"
+        f"• Возраст объявлений: {'любой' if test_config['max_age'] == 0 else test_config['max_age']} сек.\n\n"
         "Результаты придут в этом чате в течение 1-2 минут.",
         parse_mode='Markdown'
     )
@@ -566,16 +567,16 @@ def start_test_parsing(message):
     # Создаем тестовую ссылку для проверки
     test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
     
-    # Создаем тестовые настройки парсера (убираем фильтр по гео)
+    # Создаем тестовые настройки парсера (убираем все фильтры)
     test_config = {
-        'min_price': 1000,
-        'max_price': 50000,
-        'keys_word_white_list': ['iphone'],
+        'min_price': 0,
+        'max_price': 999999999,
+        'keys_word_white_list': [],
         'keys_word_black_list': [],
         'seller_black_list': [],
         'geo': '',  # Пустая строка - без фильтра по городу
-        'max_age': 86400,
-        'ignore_reserv': True,
+        'max_age': 0,  # Без ограничения по времени
+        'ignore_reserv': False,
         'ignore_promotion': False,
         'parse_views': False,
         'tg_notifications': True
@@ -628,12 +629,29 @@ def run_test_parser(user_id, config, chat_id):
         # Создаем обработчик для отправки уведомлений администратору
         tg_handler = UserTgHandler(user_id, bot)
         
+        # Создаем событие остановки
+        stop_event = threading.Event()
+        
         # Запускаем парсер
-        parser = AvitoParse(config, stop_event=threading.Event())
+        parser = AvitoParse(config, stop_event=stop_event)
         parser.tg_handler = tg_handler
         
-        # Запускаем парсинг
-        parser.parse()
+        # Запускаем парсинг в отдельном потоке
+        def parse_with_stop():
+            parser.parse()
+            # После завершения парсинга устанавливаем событие остановки
+            stop_event.set()
+        
+        parse_thread = threading.Thread(target=parse_with_stop)
+        parse_thread.start()
+        
+        # Ждем завершения парсинга или таймаут
+        parse_thread.join(timeout=120)  # 2 минуты таймаут
+        
+        # Если поток еще жив, останавливаем
+        if parse_thread.is_alive():
+            stop_event.set()
+            parse_thread.join(timeout=10)
         
         # Отправляем сообщение о завершении
         bot.send_message(
