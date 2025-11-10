@@ -1,11 +1,11 @@
 import threading
 import time
 import json
+import sqlite3
 from datetime import datetime
 from database import Database
 from dto import AvitoConfig
 from parser_cls import AvitoParse
-from bot import bot
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ class ParserService:
         self.is_running = False
         self.stop_event = threading.Event()
         self.thread = None
+        self.bot = None  # Будет установлен позже
 
     def start_monitoring(self):
         """Запускает мониторинг в фоновом режиме"""
@@ -73,8 +74,8 @@ class ParserService:
 
     def _get_active_users(self):
         """Получает список активных пользователей"""
-        with self.db.conn:
-            cursor = self.db.conn.cursor()
+        with sqlite3.connect(self.db.db_name) as conn:
+            cursor = conn.cursor()
             cursor.execute('''
                 SELECT DISTINCT u.user_id 
                 FROM users u
@@ -120,14 +121,18 @@ class ParserService:
             save_xlsx=False
         )
 
+    def set_bot(self, bot_instance):
+        """Устанавливает экземпляр бота для отправки сообщений"""
+        self.bot = bot_instance
+
     def _run_parser_for_user(self, user_id, config):
         """Запускает парсер для пользователя"""
         try:
             parser = AvitoParse(config, stop_event=self.stop_event)
             
             # Переопределяем отправку в Telegram для отправки пользователю
-            if config.tg_notifications:
-                parser.tg_handler = UserTgHandler(user_id)
+            if config.tg_notifications and self.bot:
+                parser.tg_handler = UserTgHandler(user_id, self.bot)
             
             parser.parse()
             
@@ -137,9 +142,10 @@ class ParserService:
 class UserTgHandler:
     """Обработчик для отправки уведомлений пользователю через бота"""
     
-    def __init__(self, user_id):
+    def __init__(self, user_id, bot_instance):
         self.user_id = user_id
         self.db = Database()
+        self.bot = bot_instance
 
     def send_to_tg(self, ad=None, msg=None):
         """Отправляет сообщение пользователю через бота"""
@@ -150,10 +156,10 @@ class UserTgHandler:
                 
                 # Форматируем сообщение
                 message = self.format_ad(ad)
-                bot.send_message(self.user_id, message, parse_mode='Markdown')
+                self.bot.send_message(self.user_id, message, parse_mode='Markdown')
                 
             elif msg:
-                bot.send_message(self.user_id, msg)
+                self.bot.send_message(self.user_id, msg)
                 
         except Exception as e:
             logger.error(f"Ошибка отправки сообщения пользователю {self.user_id}: {e}")

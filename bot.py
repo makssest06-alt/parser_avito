@@ -29,7 +29,10 @@ SUBSCRIPTION_PLANS = {
 pending_payments = {}
 
 # Импортируем сервис парсера
-from parser_service import parser_service
+from parser_service import ParserService
+
+# Создаем экземпляр сервиса парсера
+parser_service = ParserService()
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -417,14 +420,17 @@ def show_parser_settings(message):
         parse_mode='Markdown'
     )
 
-# Запускаем сервис парсера при старте бота
-parser_service.start_monitoring()
-
 # Запускаем фоновую проверку
 payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
 payment_checker_thread.start()
 
 # Запуск бота
 if __name__ == '__main__':
+    # Устанавливаем бот в сервис парсера
+    parser_service.set_bot(bot)
+    
+    # Запускаем сервис парсера при старте бота
+    parser_service.start_monitoring()
+    
     print("Бот запущен...")
     bot.infinity_polling()
