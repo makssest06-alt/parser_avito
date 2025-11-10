@@ -1,6 +1,7 @@
 import logging
 import telebot
 import sqlite3
+from datetime import datetime
 from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS
 from database import Database
@@ -155,8 +156,7 @@ def handle_all_messages(message):
             # TODO: Реализовать статистику
             bot.reply_to(message, "Статистика будет доступна позже.")
         elif text == 'Пользователи':
-            # TODO: Реализовать управление пользователями
-            bot.reply_to(message, "Управление пользователей будет доступно позже.")
+            show_users_list(message)
         elif text == 'Тест парсера':
             # Запускаем тестовый парсинг для администратора
             start_test_parsing(message)
@@ -415,6 +415,76 @@ def check_pending_payments():
         except Exception as e:
             logger.error(f"Ошибка в фоновой проверке платежей: {e}")
             time.sleep(60)
+
+def show_users_list(message):
+    """Показывает список пользователей администратору"""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "У вас нет прав для выполнения этой команды.")
+        return
+    
+    try:
+        with sqlite3.connect(db.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT u.user_id, u.username, u.first_name, u.last_name, 
+                       u.registration_date, u.is_active,
+                       s.subscription_type, s.end_date,
+                       COUNT(ul.avito_link) as links_count
+                FROM users u
+                LEFT JOIN subscriptions s ON u.user_id = s.user_id AND s.is_active = TRUE
+                LEFT JOIN user_links ul ON u.user_id = ul.user_id AND ul.is_active = TRUE
+                GROUP BY u.user_id
+                ORDER BY u.registration_date DESC
+                LIMIT 50
+            ''')
+            
+            users = cursor.fetchall()
+            
+            if not users:
+                bot.reply_to(message, "В базе данных нет пользователей.")
+                return
+            
+            users_text = "📊 *Список пользователей (последние 50):*\n\n"
+            
+            for i, user in enumerate(users, 1):
+                user_id, username, first_name, last_name, reg_date, is_active, sub_type, sub_end, links_count = user
+                
+                # Форматируем информацию о пользователе
+                user_info = f"{i}. ID: {user_id}\n"
+                user_info += f"   👤: {first_name or ''} {last_name or ''}\n"
+                user_info += f"   @: {username or 'нет'}\n"
+                user_info += f"   📅 Регистрация: {reg_date[:10] if reg_date else 'нет данных'}\n"
+                user_info += f"   🔗 Ссылок: {links_count}\n"
+                
+                # Информация о подписке
+                if sub_type and sub_end:
+                    days_left = (datetime.strptime(sub_end[:10], '%Y-%m-%d') - datetime.now()).days
+                    user_info += f"   💎 Подписка: {sub_type} (до {sub_end[:10]}, осталось {days_left} дн.)\n"
+                else:
+                    user_info += f"   💎 Подписка: нет\n"
+                
+                user_info += f"   ✅ Активен: {'да' if is_active else 'нет'}\n"
+                user_info += "   ──────────────\n"
+                
+                # Если сообщение становится слишком длинным, отправляем часть
+                if len(users_text + user_info) > 4000:
+                    bot.send_message(message.chat.id, users_text, parse_mode='Markdown')
+                    users_text = user_info
+                else:
+                    users_text += user_info
+            
+            # Отправляем оставшуюся часть
+            if users_text:
+                bot.send_message(message.chat.id, users_text, parse_mode='Markdown')
+                
+            # Добавляем кнопки для управления
+            markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            markup.add('Статистика', 'Пользователи', 'Тест парсера', 'Вернуться к выбору режима')
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка пользователей: {e}")
+        bot.reply_to(message, f"Произошла ошибка при получении списка пользователей: {str(e)}")
 
 def show_parser_settings(message):
     """Показывает настройки парсера"""
