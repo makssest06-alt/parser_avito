@@ -151,8 +151,11 @@ class UserTgHandler:
         """Отправляет сообщение пользователю через бота"""
         try:
             if ad and not self.db.is_ad_found(self.user_id, ad.id):
-                # Сохраняем объявление
-                self.db.add_found_ad(self.user_id, ad.id, json.dumps(ad.dict()))
+                # Сохраняем объявление, преобразуя объект в словарь и сериализуя в JSON
+                ad_dict = ad.dict()
+                # Преобразуем все HttpUrl объекты в строки
+                self._convert_urls_to_strings(ad_dict)
+                self.db.add_found_ad(self.user_id, ad.id, json.dumps(ad_dict, ensure_ascii=False))
                 
                 # Форматируем сообщение
                 message = self.format_ad(ad)
@@ -164,17 +167,48 @@ class UserTgHandler:
         except Exception as e:
             logger.error(f"Ошибка отправки сообщения пользователю {self.user_id}: {e}")
 
+    def _convert_urls_to_strings(self, obj):
+        """Рекурсивно преобразует все HttpUrl объекты в строки"""
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if hasattr(value, '__class__') and 'HttpUrl' in str(value.__class__):
+                    obj[key] = str(value)
+                elif isinstance(value, (dict, list)):
+                    self._convert_urls_to_strings(value)
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                if hasattr(item, '__class__') and 'HttpUrl' in str(item.__class__):
+                    obj[i] = str(item)
+                elif isinstance(item, (dict, list)):
+                    self._convert_urls_to_strings(item)
+
     @staticmethod
     def format_ad(ad):
         """Форматирует объявление для отправки"""
-        full_url = f"https://avito.ru/{ad.urlPath}"
-        price = ad.priceDetailed.value if ad.priceDetailed else "Цена не указана"
+        # Безопасное получение URL
+        url_path = getattr(ad, 'urlPath', '')
+        full_url = f"https://avito.ru/{url_path}" if url_path else "https://avito.ru/"
+        
+        # Безопасное получение цены
+        price = "Цена не указана"
+        if hasattr(ad, 'priceDetailed') and ad.priceDetailed:
+            price_value = getattr(ad.priceDetailed, 'value', None)
+            if price_value is not None:
+                price = f"{price_value}"
+        
+        # Безопасное получение заголовка
+        title = getattr(ad, 'title', 'Без названия')
+        
+        # Безопасное получение адреса
+        address = 'Адрес не указан'
+        if hasattr(ad, 'geo') and ad.geo:
+            address = getattr(ad.geo, 'formattedAddress', 'Адрес не указан')
         
         message = (
             f"*🏠 Новое объявление!*\n\n"
             f"*{price}* руб." + (" 🔥" if getattr(ad, 'isPromotion', False) else "") + "\n"
-            f"*{ad.title}*\n\n"
-            f"📍 {ad.geo.formattedAddress if ad.geo else 'Адрес не указан'}\n"
+            f"*{title}*\n\n"
+            f"📍 {address}\n"
             f"🔗 [Ссылка на объявление]({full_url})\n"
         )
         

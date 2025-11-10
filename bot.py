@@ -504,6 +504,9 @@ def run_test_parser(user_id, config, chat_id):
         def track_send_to_tg(ad=None, msg=None):
             if ad:
                 found_ads.append(ad)
+                logger.info(f"Найдено объявление: {ad.title} - {ad.priceDetailed.value} руб.")
+            if msg:
+                logger.info(f"Получено сообщение: {msg}")
             original_send_to_tg(ad=ad, msg=msg)
         
         tg_handler.send_to_tg = track_send_to_tg
