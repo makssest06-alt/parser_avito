@@ -156,10 +156,14 @@ class UserTgHandler:
         try:
             if ad and not self.db.is_ad_found(self.user_id, ad.id):
                 # Сохраняем объявление, преобразуя объект в словарь и сериализуя в JSON
-                ad_dict = ad.dict()
-                # Преобразуем все HttpUrl объекты в строки
+                # Используем model_dump() для Pydantic v2 или dict() для v1
+                try:
+                    ad_dict = ad.model_dump()
+                except AttributeError:
+                    ad_dict = ad.dict()
+                # Преобразуем все HttpUrl и Url объекты в строки
                 self._convert_urls_to_strings(ad_dict)
-                self.db.add_found_ad(self.user_id, ad.id, json.dumps(ad_dict, ensure_ascii=False))
+                self.db.add_found_ad(self.user_id, ad.id, json.dumps(ad_dict, ensure_ascii=False, default=str))
                 
                 # Форматируем сообщение
                 message = self.format_ad(ad)
@@ -172,18 +176,24 @@ class UserTgHandler:
             logger.error(f"Ошибка отправки сообщения пользователю {self.user_id}: {e}")
 
     def _convert_urls_to_strings(self, obj):
-        """Рекурсивно преобразует все HttpUrl объекты в строки"""
+        """Рекурсивно преобразует все HttpUrl объекты и другие несериализуемые типы в строки"""
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if hasattr(value, '__class__') and 'HttpUrl' in str(value.__class__):
+                # Проверяем, является ли объект HttpUrl или имеет метод __str__
+                if hasattr(value, '__class__') and ('HttpUrl' in str(value.__class__) or 'Url' in str(value.__class__)):
                     obj[key] = str(value)
-                elif isinstance(value, (dict, list)):
+                # Обрабатываем вложенные словари и списки
+                elif isinstance(value, dict):
+                    self._convert_urls_to_strings(value)
+                elif isinstance(value, list):
                     self._convert_urls_to_strings(value)
         elif isinstance(obj, list):
             for i, item in enumerate(obj):
-                if hasattr(item, '__class__') and 'HttpUrl' in str(item.__class__):
+                if hasattr(item, '__class__') and ('HttpUrl' in str(item.__class__) or 'Url' in str(item.__class__)):
                     obj[i] = str(item)
-                elif isinstance(item, (dict, list)):
+                elif isinstance(item, dict):
+                    self._convert_urls_to_strings(item)
+                elif isinstance(item, list):
                     self._convert_urls_to_strings(item)
 
     @staticmethod
