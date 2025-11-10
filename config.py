@@ -25,6 +25,8 @@ for line in lines:
 # Получаем переменные
 BOT_TOKEN = env_vars.get("BOT_TOKEN")
 ADMIN_IDS = env_vars.get("ADMIN_IDS", "1993831036")
+YOOKASSA_SHOP_ID = env_vars.get("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = env_vars.get("YOOKASSA_SECRET_KEY", "")
 
 # Отладочная информация
 print(f"BOT_TOKEN: {BOT_TOKEN}")

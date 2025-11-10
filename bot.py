@@ -3,6 +3,9 @@ import telebot
 from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS
 from database import Database
+from payment_service import payment_service
+import threading
+import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -21,6 +24,9 @@ SUBSCRIPTION_PLANS = {
     "premium": {"name": "Премиум", "price": 599, "days": 30, "links_limit": 20},
     "vip": {"name": "VIP", "price": 999, "days": 30, "links_limit": 100}
 }
+
+# Словарь для отслеживания ожидающих платежей
+pending_payments = {}
 
 # Обработчик команды /start
 @bot.message_handler(commands=['start'])
@@ -214,15 +220,104 @@ def handle_callback(call):
         plan_id = call.data.split('_')[1]
         plan = SUBSCRIPTION_PLANS.get(plan_id)
         if plan:
-            # TODO: Интеграция с платежной системой
-            # Пока просто добавляем подписку
-            db.add_subscription(call.from_user.id, plan_id, plan['days'])
-            bot.answer_callback_query(call.id, f"Подписка {plan['name']} активирована!")
+            # Создаем платеж
+            payment = payment_service.create_payment(
+                amount=plan['price'],
+                description=f"Подписка {plan['name']} на парсер Авито",
+                user_id=call.from_user.id,
+                plan_id=plan_id
+            )
+            
+            if payment and payment.confirmation.confirmation_url:
+                # Сохраняем информацию о платеже
+                pending_payments[payment.id] = {
+                    'user_id': call.from_user.id,
+                    'plan_id': plan_id,
+                    'message_id': call.message.message_id
+                }
+                
+                # Добавляем запись о платеже в БД
+                db.add_payment(
+                    user_id=call.from_user.id,
+                    amount=plan['price'],
+                    payment_system='yookassa',
+                    payment_id=payment.id,
+                    status='pending'
+                )
+                
+                # Отправляем ссылку для оплаты
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("💳 Оплатить", url=payment.confirmation.confirmation_url))
+                markup.add(InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{payment.id}"))
+                
+                bot.send_message(
+                    call.message.chat.id,
+                    f"Для активации подписки {plan['name']} нужно оплатить {plan['price']}₽\n"
+                    f"После оплаты нажмите 'Проверить оплату'",
+                    reply_markup=markup
+                )
+            else:
+                bot.answer_callback_query(call.id, "Ошибка создания платежа. Попробуйте позже.")
+    
+    elif call.data.startswith('check_payment_'):
+        payment_id = call.data.split('_')[2]
+        check_payment_status(call.from_user.id, payment_id, call.message.chat.id)
+
+def check_payment_status(user_id: int, payment_id: str, chat_id: int):
+    """Проверяет статус платежа и активирует подписку при успешной оплате"""
+    status = payment_service.check_payment_status(payment_id)
+    
+    if status == 'succeeded':
+        payment_info = pending_payments.get(payment_id)
+        if payment_info and payment_info['user_id'] == user_id:
+            plan_id = payment_info['plan_id']
+            plan = SUBSCRIPTION_PLANS.get(plan_id)
+            
+            # Активируем подписку
+            db.add_subscription(user_id, plan_id, plan['days'])
+            
+            # Обновляем статус платежа в БД
+            db.add_payment(
+                user_id=user_id,
+                amount=plan['price'],
+                payment_system='yookassa',
+                payment_id=payment_id,
+                status='succeeded'
+            )
+            
+            # Удаляем из ожидающих
+            del pending_payments[payment_id]
+            
             bot.send_message(
-                call.message.chat.id,
-                f"Поздравляем! Ты активировал подписку {plan['name']} на {plan['days']} дней!\n"
+                chat_id,
+                f"✅ Платеж подтвержден! Подписка {plan['name']} активирована на {plan['days']} дней!\n"
                 f"Теперь ты можешь добавить до {plan['links_limit']} ссылок для мониторинга."
             )
+        else:
+            bot.send_message(chat_id, "❌ Информация о платеже не найдена.")
+    elif status == 'pending':
+        bot.send_message(chat_id, "⏳ Платеж еще обрабатывается. Попробуйте проверить позже.")
+    else:
+        bot.send_message(chat_id, "❌ Платеж не найден или отменен.")
+
+# Фоновая проверка платежей
+def check_pending_payments():
+    while True:
+        try:
+            for payment_id, payment_info in list(pending_payments.items()):
+                check_payment_status(
+                    payment_info['user_id'], 
+                    payment_id, 
+                    payment_info['user_id']  # Используем user_id как chat_id
+                )
+            time.sleep(60)  # Проверяем каждую минуту
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой проверке платежей: {e}")
+            time.sleep(60)
+
+# Запускаем фоновую проверку
+payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
+payment_checker_thread.start()
 
 # Запуск бота
 if __name__ == '__main__':
