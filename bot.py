@@ -172,6 +172,7 @@ def handle_all_messages(message):
         elif text == 'Моя подписка':
             subscription = db.get_user_subscription(user_id)
             if subscription:
+                # Всегда показываем тип подписки и дату окончания, независимо от статуса
                 status = "✅ Активна" if subscription['is_active'] else "❌ Неактивна"
                 bot.reply_to(message, f"📋 *Информация о подписке:*\n\n"
                                      f"💎 Тип: {subscription['type']}\n"
