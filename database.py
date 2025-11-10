@@ -127,17 +127,20 @@ class Database:
             cursor.execute('''
                 SELECT subscription_type, start_date, end_date, is_active
                 FROM subscriptions 
-                WHERE user_id = ? AND is_active = TRUE AND end_date > ?
+                WHERE user_id = ? 
                 ORDER BY end_date DESC LIMIT 1
-            ''', (user_id, datetime.now()))
+            ''', (user_id,))
             
             result = cursor.fetchone()
             if result:
+                subscription_type, start_date, end_date, is_active = result
+                # Проверяем, активна ли подписка
+                is_currently_active = is_active and datetime.now() < datetime.fromisoformat(end_date)
                 return {
-                    'type': result[0],
-                    'start_date': result[1],
-                    'end_date': result[2],
-                    'is_active': result[3]
+                    'type': subscription_type,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'is_active': is_currently_active
                 }
             return None
 
@@ -190,7 +193,7 @@ class Database:
 
     def is_user_active(self, user_id: int) -> bool:
         subscription = self.get_user_subscription(user_id)
-        return subscription is not None
+        return subscription and subscription['is_active']
 
     def get_parser_settings(self, user_id: int) -> Optional[dict]:
         with sqlite3.connect(self.db_name) as conn:

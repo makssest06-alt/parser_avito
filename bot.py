@@ -172,11 +172,13 @@ def handle_all_messages(message):
         elif text == 'Моя подписка':
             subscription = db.get_user_subscription(user_id)
             if subscription:
-                bot.reply_to(message, f"Твоя подписка: {subscription['type']}\n"
-                                     f"Активна до: {subscription['end_date'][:10]}\n"
-                                     f"Статус: {'Активна' if subscription['is_active'] else 'Неактивна'}")
+                status = "✅ Активна" if subscription['is_active'] else "❌ Неактивна"
+                bot.reply_to(message, f"📋 *Информация о подписке:*\n\n"
+                                     f"💎 Тип: {subscription['type']}\n"
+                                     f"📅 Действует до: {subscription['end_date'][:10]}\n"
+                                     f"🔸 Статус: {status}")
             else:
-                bot.reply_to(message, "У тебя нет активной подписки. Нажми 'Купить подписку'")
+                bot.reply_to(message, "📋 У тебя ещё не было подписки. Нажми 'Купить подписку'")
         elif text == 'Добавить ссылку':
             subscription = db.get_user_subscription(user_id)
             if subscription:
@@ -215,12 +217,15 @@ def handle_all_messages(message):
                                   "• Мониторить до 100 ссылок одновременно\n"
                                   "• Быть первым на самых выгодных предложениях!")
         elif text == 'Моя подписка':
+            subscription = db.get_user_subscription(user_id)
             if subscription:
-                bot.reply_to(message, f"Твоя подписка: {subscription['type']}\n"
-                                     f"Активна до: {subscription['end_date'][:10]}\n"
-                                     f"Статус: {'Активна' if subscription['is_active'] else 'Неактивна'}")
+                status = "✅ Активна" if subscription['is_active'] else "❌ Неактивна"
+                bot.reply_to(message, f"📋 *Информация о подписке:*\n\n"
+                                     f"💎 Тип: {subscription['type']}\n"
+                                     f"📅 Действует до: {subscription['end_date'][:10]}\n"
+                                     f"🔸 Статус: {status}")
             else:
-                bot.reply_to(message, "У тебя нет активной подписки. Нажми 'Купить подписку'")
+                bot.reply_to(message, "📋 У тебя ещё не было подписки. Нажми 'Купить подписку'")
         elif text == 'Добавить ссылку':
             if subscription:
                 # Проверяем лимит ссылок
