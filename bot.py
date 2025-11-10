@@ -434,14 +434,14 @@ def start_test_parsing(message):
     # Создаем тестовую ссылку для проверки
     test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
     
-    # Создаем тестовые настройки парсера
+    # Создаем тестовые настройки парсера (убираем фильтр по гео для теста)
     test_config = {
         'min_price': 1000,
         'max_price': 50000,
         'keys_word_white_list': ['iphone'],
         'keys_word_black_list': [],
         'seller_black_list': [],
-        'geo': 'Москва',
+        'geo': '',  # Убираем фильтр по городу для теста
         'max_age': 86400,
         'ignore_reserv': True,
         'ignore_promotion': False,
@@ -485,7 +485,7 @@ def start_test_parsing(message):
         f"• Ссылка: {test_url}\n"
         f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
         f"• Ключевые слова: {', '.join(test_config['keys_word_white_list'])}\n"
-        f"• Город: {test_config['geo']}\n\n"
+        f"• Город: {'Любой (фильтр отключен)' if not test_config['geo'] else test_config['geo']}\n\n"
         "Результаты придут в этом чате в течение 1-2 минут.",
         parse_mode='Markdown'
     )
@@ -496,6 +496,17 @@ def run_test_parser(user_id, config, chat_id):
         # Создаем обработчик для отправки уведомлений администратору
         tg_handler = UserTgHandler(user_id, bot)
         
+        # Создаем список для отслеживания найденных объявлений
+        found_ads = []
+        original_send_to_tg = tg_handler.send_to_tg
+        
+        def track_send_to_tg(ad=None, msg=None):
+            if ad:
+                found_ads.append(ad)
+            original_send_to_tg(ad=ad, msg=msg)
+        
+        tg_handler.send_to_tg = track_send_to_tg
+        
         # Запускаем парсер
         parser = AvitoParse(config, stop_event=threading.Event())
         parser.tg_handler = tg_handler
@@ -503,12 +514,33 @@ def run_test_parser(user_id, config, chat_id):
         # Запускаем парсинг
         parser.parse()
         
+        # Формируем сообщение о результатах
+        if found_ads:
+            result_message = (
+                f"✅ *Тестовый парсинг завершен успешно!*\n\n"
+                f"Найдено и отправлено *{len(found_ads)}* новых объявлений.\n"
+                f"Парсер работает корректно.\n\n"
+                f"Примеры найденных объявлений:\n"
+            )
+            # Добавляем информацию о первых 3 объявлениях
+            for i, ad in enumerate(found_ads[:3]):
+                result_message += f"\n{i+1}. {ad.title} - {ad.priceDetailed.value} руб."
+        else:
+            result_message = (
+                "⚠️ *Тестовый парсинг завершен, но объявления не найдены.*\n\n"
+                "Возможные причины:\n"
+                "• Нет новых объявлений по заданным критериям\n"
+                "• Все объявления уже были просмотрены ранее\n"
+                "• Слишком строгие фильтры поиска\n\n"
+                "Попробуйте изменить параметры поиска."
+            )
+        
+        result_message += "\n\nТестовые данные были автоматически удалены."
+        
         # Отправляем сообщение о завершении
         bot.send_message(
             chat_id,
-            "✅ *Тестовый парсинг завершен!*\n\n"
-            "Если вы получили уведомления о новых объявлениях - парсер работает корректно.\n"
-            "Тестовые данные были автоматически удалены.",
+            result_message,
             parse_mode='Markdown'
         )
         
