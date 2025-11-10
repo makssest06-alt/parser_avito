@@ -433,7 +433,9 @@ def show_parser_settings(message):
             'ignore_reserv': True,
             'ignore_promotion': False,
             'parse_views': False,
-            'tg_notifications': True
+            'tg_notifications': True,
+            'proxy_string': '',
+            'proxy_change_url': ''
         }
         db.update_parser_settings(user_id, settings)
     

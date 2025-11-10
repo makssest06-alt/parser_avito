@@ -97,7 +97,9 @@ class ParserService:
             'ignore_reserv': True,
             'ignore_promotion': False,
             'parse_views': False,
-            'tg_notifications': True
+            'tg_notifications': True,
+            'proxy_string': '',
+            'proxy_change_url': ''
         }
 
     def _create_config(self, links, settings, user_id):

@@ -79,8 +79,8 @@ class Database:
                     ignore_promotion BOOLEAN DEFAULT FALSE,
                     parse_views BOOLEAN DEFAULT FALSE,
                     tg_notifications BOOLEAN DEFAULT TRUE,
-                    proxy_string TEXT,
-                    proxy_change_url TEXT,
+                    proxy_string TEXT DEFAULT '',
+                    proxy_change_url TEXT DEFAULT '',
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
@@ -97,6 +97,18 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
             ''')
+            
+            conn.commit()
+            
+            # Проверяем существование колонок proxy_string и proxy_change_url
+            cursor.execute("PRAGMA table_info(parser_settings)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            # Добавляем отсутствующие колонки
+            if 'proxy_string' not in columns:
+                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_string TEXT DEFAULT ''")
+            if 'proxy_change_url' not in columns:
+                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_change_url TEXT DEFAULT ''")
             
             conn.commit()
 
