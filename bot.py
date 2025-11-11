@@ -850,7 +850,7 @@ def start_user_test_parsing(message):
         f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
         f"• Ключевые слова: {', '.join(test_config['keys_word_white_list']) if test_config['keys_word_white_list'] else 'любые'}\n"
         f"• Город: {'Любой' if not test_config['geo'] else test_config['geo']}\n\n"
-        "Если парсер работает корректно, ты получишь уведомления о новых объявлениях в течение 1-2 минут.",
+        "Результаты придут в этом чате в течение 1-2 минут.",
         parse_mode='Markdown'
     )
 
@@ -859,6 +859,20 @@ def run_user_test_parser(user_id, config, chat_id):
     try:
         # Создаем обработчик для отправки уведомлений пользователю
         tg_handler = UserTgHandler(user_id, bot)
+        
+        # Создаем список для отслеживания найденных объявлений
+        found_ads = []
+        original_send_to_tg = tg_handler.send_to_tg
+        
+        def track_send_to_tg(ad=None, msg=None):
+            if ad:
+                found_ads.append(ad)
+                logger.info(f"Найдено объявление для пользователя {user_id}: {ad.title} - {ad.priceDetailed.value} руб.")
+            if msg:
+                logger.info(f"Получено сообщение для пользователя {user_id}: {msg}")
+            original_send_to_tg(ad=ad, msg=msg)
+        
+        tg_handler.send_to_tg = track_send_to_tg
         
         # Создаем событие остановки
         stop_event = threading.Event()
@@ -884,12 +898,31 @@ def run_user_test_parser(user_id, config, chat_id):
             stop_event.set()
             parse_thread.join(timeout=10)
         
+        # Формируем сообщение о результатах
+        if found_ads:
+            result_message = (
+                f"✅ *Тестовый парсинг завершен успешно!*\n\n"
+                f"Найдено и отправлено *{len(found_ads)}* новых объявлений.\n"
+                f"Парсер работает корректно.\n\n"
+                f"Примеры найденных объявлений:\n"
+            )
+            # Добавляем информацию о первых 3 объявлениях
+            for i, ad in enumerate(found_ads[:3]):
+                result_message += f"\n{i+1}. {ad.title} - {ad.priceDetailed.value} руб."
+        else:
+            result_message = (
+                "⚠️ *Тестовый парсинг завершен, но объявления не найдены.*\n\n"
+                "Возможные причины:\n"
+                "• Нет новых объявлений по заданным критериям\n"
+                "• Все объявления уже были просмотрены ранее\n"
+                "• Слишком строгие фильтры поиска\n\n"
+                "Попробуйте изменить параметры поиска."
+            )
+        
         # Отправляем сообщение о завершении
         bot.send_message(
             chat_id,
-            "✅ *Тестовый парсинг завершен!*\n\n"
-            "Если ты получил уведомления о новых объявлениях - парсер работает корректно.\n"
-            "Теперь ты можешь быть уверен, что будешь получать уведомления о новых объявлениях по твоим ссылкам.",
+            result_message,
             parse_mode='Markdown'
         )
             
