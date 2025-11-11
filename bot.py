@@ -244,9 +244,14 @@ def handle_all_messages(message):
                 links = db.get_user_links(user_id)
                 if links:
                     links_text = "Твои ссылки:\n\n" + "\n".join([f"• {link[0]}" for link in links])
-                    bot.reply_to(message, links_text)
+                    # Добавляем кнопку тестового парсинга
+                    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    bot.reply_to(message, links_text, reply_markup=markup)
                 else:
-                    bot.reply_to(message, "У тебя пока нет добавленных ссылок.")
+                    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    bot.reply_to(message, "У тебя пока нет добавленных ссылок.", reply_markup=markup)
             else:
                 bot.reply_to(message, "Для просмотра ссылок нужна активная подписка!")
         
@@ -260,6 +265,11 @@ def handle_all_messages(message):
                 show_proxy_settings(message)
             else:
                 bot.reply_to(message, "Для настройки прокси нужна активная подписка!")
+        elif text == 'Тест парсера':
+            if subscription:
+                start_user_test_parsing(message)
+            else:
+                bot.reply_to(message, "Для тестирования парсера нужна активная подписка!")
         else:
             bot.reply_to(message, "Неизвестная команда")
 
@@ -766,6 +776,130 @@ def start_test_parsing(message):
         "Результаты придут в этом чате в течение 1-2 минут.",
         parse_mode='Markdown'
     )
+
+def start_user_test_parsing(message):
+    """Запускает тестовый парсинг для обычного пользователя"""
+    user_id = message.from_user.id
+    
+    # Получаем текущие настройки пользователя
+    current_settings = db.get_parser_settings(user_id)
+    if not current_settings:
+        current_settings = {}
+    
+    # Получаем ссылки пользователя
+    user_links = db.get_user_links(user_id)
+    if not user_links:
+        bot.send_message(
+            message.chat.id,
+            "❌ *У тебя нет добавленных ссылок для тестирования!*\n\n"
+            "Сначала добавь ссылки через меню 'Добавить ссылку'.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Берем первую ссылку пользователя
+    test_url = user_links[0][0]
+    
+    # Используем настройки пользователя
+    test_config = {
+        'min_price': current_settings.get('min_price', 0),
+        'max_price': current_settings.get('max_price', 999999999),
+        'keys_word_white_list': current_settings.get('keys_word_white_list', []),
+        'keys_word_black_list': current_settings.get('keys_word_black_list', []),
+        'seller_black_list': current_settings.get('seller_black_list', []),
+        'geo': current_settings.get('geo', ''),
+        'max_age': current_settings.get('max_age', 86400),
+        'ignore_reserv': current_settings.get('ignore_reserv', True),
+        'ignore_promotion': current_settings.get('ignore_promotion', False),
+        'parse_views': current_settings.get('parse_views', False),
+        'tg_notifications': True,
+        'proxy_string': current_settings.get('proxy_string', ''),
+        'proxy_change_url': current_settings.get('proxy_change_url', '')
+    }
+    
+    # Создаем конфиг для парсера
+    config = AvitoConfig(
+        urls=[test_url],
+        min_price=test_config['min_price'],
+        max_price=test_config['max_price'],
+        keys_word_white_list=test_config['keys_word_white_list'],
+        keys_word_black_list=test_config['keys_word_black_list'],
+        seller_black_list=test_config['seller_black_list'],
+        geo=test_config['geo'],
+        max_age=test_config['max_age'],
+        ignore_reserv=test_config['ignore_reserv'],
+        ignore_promotion=test_config['ignore_promotion'],
+        parse_views=test_config['parse_views'],
+        proxy_string=test_config['proxy_string'],
+        proxy_change_url=test_config['proxy_change_url'],
+        one_time_start=False,
+        count=1,
+        pause_between_links=2,
+        max_count_of_retry=3,
+        save_xlsx=False
+    )
+    
+    # Запускаем парсинг в отдельном потоке
+    threading.Thread(target=run_user_test_parser, args=(user_id, config, message.chat.id), daemon=True).start()
+    
+    bot.send_message(
+        message.chat.id,
+        "🔍 *Запускаю тестовый парсинг...*\n\n"
+        "Использую твои настройки и первую ссылку из списка.\n\n"
+        f"• Ссылка: {test_url}\n"
+        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
+        f"• Ключевые слова: {', '.join(test_config['keys_word_white_list']) if test_config['keys_word_white_list'] else 'любые'}\n"
+        f"• Город: {'Любой' if not test_config['geo'] else test_config['geo']}\n\n"
+        "Если парсер работает корректно, ты получишь уведомления о новых объявлениях в течение 1-2 минут.",
+        parse_mode='Markdown'
+    )
+
+def run_user_test_parser(user_id, config, chat_id):
+    """Запускает тестовый парсер для пользователя"""
+    try:
+        # Создаем обработчик для отправки уведомлений пользователю
+        tg_handler = UserTgHandler(user_id, bot)
+        
+        # Создаем событие остановки
+        stop_event = threading.Event()
+        
+        # Запускаем парсер
+        parser = AvitoParse(config, stop_event=stop_event)
+        parser.tg_handler = tg_handler
+        
+        # Запускаем парсинг в отдельном потоке
+        def parse_with_stop():
+            parser.parse()
+            # После завершения парсинга устанавливаем событие остановки
+            stop_event.set()
+        
+        parse_thread = threading.Thread(target=parse_with_stop)
+        parse_thread.start()
+        
+        # Ждем завершения парсинга или таймаут
+        parse_thread.join(timeout=120)  # 2 минуты таймаут
+        
+        # Если поток еще жив, останавливаем
+        if parse_thread.is_alive():
+            stop_event.set()
+            parse_thread.join(timeout=10)
+        
+        # Отправляем сообщение о завершении
+        bot.send_message(
+            chat_id,
+            "✅ *Тестовый парсинг завершен!*\n\n"
+            "Если ты получил уведомления о новых объявлениях - парсер работает корректно.\n"
+            "Теперь ты можешь быть уверен, что будешь получать уведомления о новых объявлениях по твоим ссылкам.",
+            parse_mode='Markdown'
+        )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при тестовом парсинге для пользователя {user_id}: {e}")
+        bot.send_message(
+            chat_id,
+            f"❌ *Ошибка при тестовом парсинге:*\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
 
 def run_test_parser(user_id, config, chat_id):
     """Запускает парсер в отдельном потоке"""
