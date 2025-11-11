@@ -66,7 +66,7 @@ def send_welcome(message):
         if subscription:
             # Пользователь с активной подпиской
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+            markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
             bot.send_message(
                 message.chat.id,
                 f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
@@ -126,7 +126,7 @@ def handle_all_messages(message):
             if subscription:
                 # Пользователь с активной подпиской
                 markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                markup.add('Добавить ссылку', 'Мои ссылки', 'Моя подписка', 'Вернуться к выбору режима')
+                markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка', 'Вернуться к выбору режима')
                 bot.send_message(
                     message.chat.id,
                     f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
