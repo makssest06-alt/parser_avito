@@ -1001,4 +1001,11 @@ if __name__ == '__main__':
     parser_service.start_monitoring()
     
     print("Бот запущен...")
-    bot.infinity_polling()
+    try:
+        bot.infinity_polling(skip_pending=True)
+    except KeyboardInterrupt:
+        print("Бот остановлен пользователем")
+        parser_service.stop_monitoring()
+    except Exception as e:
+        print(f"Ошибка при работе бота: {e}")
+        parser_service.stop_monitoring()

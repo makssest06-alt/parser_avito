@@ -37,6 +37,10 @@ class ParserService:
         if self.thread:
             self.thread.join(timeout=10)
         logger.info("Мониторинг остановлен")
+        
+    def __del__(self):
+        """Деструктор для корректной остановки"""
+        self.stop_monitoring()
 
     def _monitoring_loop(self):
         """Основной цикл мониторинга"""
