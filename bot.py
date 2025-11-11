@@ -268,10 +268,7 @@ def handle_all_messages(message):
             else:
                 bot.reply_to(message, "Для настройки прокси нужна активная подписка!")
         elif text == 'Тест парсера':
-            if subscription:
-                start_user_test_parsing(message)
-            else:
-                bot.reply_to(message, "Для тестирования парсера нужна активная подписка!")
+            start_simple_user_test_parsing(message)
         else:
             bot.reply_to(message, "Неизвестная команда")
 
@@ -989,6 +986,158 @@ def run_test_parser(user_id, config, chat_id):
         bot.send_message(
             chat_id,
             f"❌ *Ошибка при тестовом парсинге:*\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
+
+def start_simple_user_test_parsing(message):
+    """Запускает упрощенный тестовый парсинг для всех пользователей"""
+    user_id = message.from_user.id
+    
+    # Создаем тестовую ссылку для проверки (iPhone в Москве)
+    test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
+    
+    # Создаем тестовые настройки парсера (убираем все фильтры)
+    test_config = {
+        'min_price': 0,
+        'max_price': 999999999,
+        'keys_word_white_list': [],
+        'keys_word_black_list': [],
+        'seller_black_list': [],
+        'geo': '',  # Пустая строка - без фильтра по городу
+        'max_age': 0,  # Без ограничения по времени
+        'ignore_reserv': False,
+        'ignore_promotion': False,
+        'parse_views': False,
+        'tg_notifications': True,
+        'proxy_string': '',
+        'proxy_change_url': ''
+    }
+    
+    # Создаем конфиг для парсера
+    config = AvitoConfig(
+        urls=[test_url],
+        min_price=test_config['min_price'],
+        max_price=test_config['max_price'],
+        keys_word_white_list=test_config['keys_word_white_list'],
+        keys_word_black_list=test_config['keys_word_black_list'],
+        seller_black_list=test_config['seller_black_list'],
+        geo=test_config['geo'],
+        max_age=test_config['max_age'],
+        ignore_reserv=test_config['ignore_reserv'],
+        ignore_promotion=test_config['ignore_promotion'],
+        parse_views=test_config['parse_views'],
+        proxy_string=test_config['proxy_string'],
+        proxy_change_url=test_config['proxy_change_url'],
+        one_time_start=False,
+        count=1,
+        pause_between_links=2,
+        max_count_of_retry=3,
+        save_xlsx=False
+    )
+    
+    # Запускаем парсинг в отдельном потоке
+    threading.Thread(target=run_simple_user_test_parser, args=(user_id, config, message.chat.id), daemon=True).start()
+    
+    bot.send_message(
+        message.chat.id,
+        "🔍 *Запускаю тестовый парсинг...*\n\n"
+        "Тестовые параметры:\n"
+        f"• Ссылка: {test_url}\n"
+        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб.\n"
+        f"• Ключевые слова: {'любые'}\n"
+        f"• Город: {'Любой'}\n\n"
+        "*Это демо-версия парсера!*\n"
+        "Для полноценного использования с твоими ссылками и настройками - приобрети подписку.\n\n"
+        "Результаты придут в этом чате в течение 1-2 минут.",
+        parse_mode='Markdown'
+    )
+
+def run_simple_user_test_parser(user_id, config, chat_id):
+    """Запускает упрощенный тестовый парсер для всех пользователей"""
+    try:
+        # Создаем обработчик для отправки уведомлений пользователю
+        tg_handler = UserTgHandler(user_id, bot)
+        
+        # Создаем список для отслеживания найденных объявлений
+        found_ads = []
+        original_send_to_tg = tg_handler.send_to_tg
+        
+        def track_send_to_tg(ad=None, msg=None):
+            if ad:
+                found_ads.append(ad)
+                logger.info(f"Найдено объявление для пользователя {user_id}: {ad.title} - {ad.priceDetailed.value} руб.")
+            if msg:
+                logger.info(f"Получено сообщение для пользователя {user_id}: {msg}")
+            original_send_to_tg(ad=ad, msg=msg)
+        
+        tg_handler.send_to_tg = track_send_to_tg
+        
+        # Создаем событие остановки
+        stop_event = threading.Event()
+        
+        # Запускаем парсер
+        parser = AvitoParse(config, stop_event=stop_event)
+        parser.tg_handler = tg_handler
+        
+        # Запускаем парсинг в отдельном потоке
+        def parse_with_stop():
+            parser.parse()
+            # После завершения парсинга устанавливаем событие остановки
+            stop_event.set()
+        
+        parse_thread = threading.Thread(target=parse_with_stop)
+        parse_thread.start()
+        
+        # Ждем завершения парсинга или таймаут
+        parse_thread.join(timeout=120)  # 2 минуты таймаут
+        
+        # Если поток еще жив, останавливаем
+        if parse_thread.is_alive():
+            stop_event.set()
+            parse_thread.join(timeout=10)
+        
+        # Формируем сообщение о результатах
+        if found_ads:
+            result_message = (
+                f"✅ *Тестовый парсинг завершен успешно!*\n\n"
+                f"Найдено и отправлено *{len(found_ads)}* новых объявлений.\n"
+                f"Парсер работает корректно.\n\n"
+                f"*Примеры найденных объявлений:*\n"
+            )
+            # Добавляем информацию о первых 3 объявлениях
+            for i, ad in enumerate(found_ads[:3]):
+                result_message += f"\n{i+1}. {ad.title} - {ad.priceDetailed.value} руб."
+            
+            result_message += "\n\n💎 *Хочешь больше?*\nПриобрети подписку и настрой парсер под свои нужды!"
+        else:
+            result_message = (
+                "⚠️ *Тестовый парсинг завершен, но объявления не найдены.*\n\n"
+                "Возможные причины:\n"
+                "• Нет новых объявлений по заданным критериям\n"
+                "• Все объявления уже были просмотрены ранее\n"
+                "• Проблемы с подключением\n\n"
+                "💎 *Попробуй полноценную версию с подпиской!*\n"
+                "Ты сможешь настроить фильтры под себя и мониторить свои ссылки."
+            )
+        
+        # Добавляем кнопку для покупки подписки
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("💎 Купить подписку", callback_data="show_subscription_plans"))
+        
+        # Отправляем сообщение о завершении
+        bot.send_message(
+            chat_id,
+            result_message,
+            parse_mode='Markdown',
+            reply_markup=markup
+        )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при тестовом парсинге для пользователя {user_id}: {e}")
+        bot.send_message(
+            chat_id,
+            f"❌ *Ошибка при тестовом парсинге:*\n\n{str(e)}\n\n"
+            "💎 *Попробуй полноценную версию с подпиской!*",
             parse_mode='Markdown'
         )
 
