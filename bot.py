@@ -76,10 +76,11 @@ def send_welcome(message):
         else:
             # Пользователь без подписки
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add('Купить подписку', 'Информация')
+            markup.add('Купить подписку', 'Тест парсера', 'Информация')
             bot.send_message(
                 message.chat.id,
                 "Привет! Я парсер Авито. Для использования бота нужна подписка.\n"
+                "Но ты можешь протестировать парсер прямо сейчас!\n"
                 "Выбери тариф и начни получать новые объявления первым!",
                 reply_markup=markup
             )
@@ -136,10 +137,11 @@ def handle_all_messages(message):
             else:
                 # Пользователь без подписки
                 markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                markup.add('Купить подписку', 'Информация', 'Вернуться к выбору режима')
+                markup.add('Купить подписку', 'Тест парсера', 'Информация', 'Вернуться к выбору режима')
                 bot.send_message(
                     message.chat.id,
                     "Привет! Я парсер Авито. Для использования бота нужна подписка.\n"
+                    "Но ты можешь протестировать парсер прямо сейчас!\n"
                     "Выбери тариф и начни получать новые объявления первым!",
                     reply_markup=markup
                 )
@@ -347,6 +349,8 @@ def handle_callback(call):
     elif call.data.startswith('check_payment_'):
         payment_id = call.data.split('_')[2]
         check_payment_status(call.from_user.id, payment_id, call.message.chat.id)
+    elif call.data == 'show_subscription_plans':
+        show_subscription_plans(call.message)
 
 def check_payment_status(user_id: int, payment_id: str, chat_id: int):
     """Проверяет статус платежа и активирует подписку при успешной оплате"""
