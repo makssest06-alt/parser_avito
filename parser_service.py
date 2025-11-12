@@ -123,10 +123,11 @@ class ParserService:
             parse_views=settings['parse_views'],
             proxy_string=settings.get('proxy_string', ''),
             proxy_change_url=settings.get('proxy_change_url', ''),
+            tg_notifications=settings.get('tg_notifications', True),
             one_time_start=True,
             count=1,
-            pause_between_links=2,
-            max_count_of_retry=3,
+            pause_between_links=10,  # Увеличиваем паузу между запросами
+            max_count_of_retry=5,
             save_xlsx=False
         )
 
