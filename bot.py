@@ -304,44 +304,63 @@ def handle_callback(call):
         plan_id = call.data.split('_')[1]
         plan = SUBSCRIPTION_PLANS.get(plan_id)
         if plan:
-            # Создаем платеж
-            payment = payment_service.create_payment(
-                amount=plan['price'],
-                description=f"Подписка {plan['name']} на парсер Авито",
-                user_id=call.from_user.id,
-                plan_id=plan_id
-            )
-            
-            if payment and payment.confirmation.confirmation_url:
-                # Сохраняем информацию о платеже
-                pending_payments[payment.id] = {
-                    'user_id': call.from_user.id,
-                    'plan_id': plan_id,
-                    'message_id': call.message.message_id
-                }
-                
-                # Добавляем запись о платеже в БД
-                db.add_payment(
-                    user_id=call.from_user.id,
+            try:
+                # Создаем платеж
+                payment = payment_service.create_payment(
                     amount=plan['price'],
-                    payment_system='yookassa',
-                    payment_id=payment.id,
-                    status='pending'
+                    description=f"Подписка {plan['name']} на парсер Авито",
+                    user_id=call.from_user.id,
+                    plan_id=plan_id
                 )
                 
-                # Отправляем ссылку для оплаты
-                markup = InlineKeyboardMarkup()
-                markup.add(InlineKeyboardButton("💳 Оплатить", url=payment.confirmation.confirmation_url))
-                markup.add(InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{payment.id}"))
-                
-                bot.send_message(
-                    call.message.chat.id,
-                    f"Для активации подписки {plan['name']} нужно оплатить {plan['price']}₽\n"
-                    f"После оплаты нажмите 'Проверить оплату'",
-                    reply_markup=markup
-                )
-            else:
-                bot.answer_callback_query(call.id, "Ошибка создания платежа. Попробуйте позже.")
+                if payment and hasattr(payment, 'confirmation') and hasattr(payment.confirmation, 'confirmation_url'):
+                    # Сохраняем информацию о платеже
+                    pending_payments[payment.id] = {
+                        'user_id': call.from_user.id,
+                        'plan_id': plan_id,
+                        'message_id': call.message.message_id
+                    }
+                    
+                    # Добавляем запись о платеже в БД
+                    db.add_payment(
+                        user_id=call.from_user.id,
+                        amount=plan['price'],
+                        payment_system='yookassa',
+                        payment_id=payment.id,
+                        status='pending'
+                    )
+                    
+                    # Отправляем ссылку для оплаты
+                    markup = InlineKeyboardMarkup()
+                    markup.add(InlineKeyboardButton("💳 Оплатить", url=payment.confirmation.confirmation_url))
+                    markup.add(InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_payment_{payment.id}"))
+                    
+                    message_text = (
+                        f"💎 *Подписка {plan['name']}*\n\n"
+                        f"💰 Сумма: *{plan['price']}₽*\n"
+                        f"📅 Срок: *{plan['days']}* дней\n"
+                        f"🔗 Лимит ссылок: *{plan['links_limit']}*\n\n"
+                        f"Для активации подписки нажмите кнопку '💳 Оплатить'.\n"
+                        f"После оплаты нажмите '✅ Проверить оплату'."
+                    )
+                    
+                    # Если тестовый режим, добавляем информацию
+                    if payment_service.test_mode:
+                        message_text += "\n\n⚠️ *Тестовый режим оплаты*\nПлатеж будет автоматически подтвержден при проверке"
+                    
+                    bot.send_message(
+                        call.message.chat.id,
+                        message_text,
+                        reply_markup=markup,
+                        parse_mode='Markdown'
+                    )
+                else:
+                    bot.answer_callback_query(call.id, "❌ Ошибка создания платежа. Попробуйте позже.", show_alert=True)
+            except Exception as e:
+                logger.error(f"Ошибка при создании платежа: {e}")
+                bot.answer_callback_query(call.id, "❌ Ошибка при создании платежа. Попробуйте позже.", show_alert=True)
+        else:
+            bot.answer_callback_query(call.id, "❌ Тариф не найден.", show_alert=True)
     
     elif call.data.startswith('check_payment_'):
         payment_id = call.data.split('_')[2]
