@@ -21,8 +21,6 @@ from hide_private_data import log_config
 from load_config import load_avito_config
 from models import ItemsResponse, Item
 from tg_sender import SendAdToTg
-from version import VERSION
-from xlsx_service import XLSXHandler
 
 DEBUG_MODE = False
 
@@ -39,7 +37,7 @@ class AvitoParse:
         self.proxy_obj = self.get_proxy_obj()
         self.db_handler = Database()
         self.tg_handler = self.get_tg_handler()
-        self.xlsx_handler = XLSXHandler(self.__get_file_title())
+        self.xlsx_handler = None
         self.stop_event = stop_event
         self.cookies = None
         self.session = requests.Session()
@@ -47,7 +45,7 @@ class AvitoParse:
         self.good_request_count = 0
         self.bad_request_count = 0
 
-        log_config(config=self.config, version=VERSION)
+        log_config(config=self.config)
 
     def get_tg_handler(self) -> SendAdToTg | None:
         if all([self.config.tg_token, self.config.tg_chat_id]):
@@ -157,11 +155,7 @@ class AvitoParse:
                     return None
 
     def parse(self):
-        if self.config.one_file_for_link:
-            self.xlsx_handler = None
-
         for _index, url in enumerate(self.config.urls):
-            ads_in_link = []
             for i in range(0, self.config.count):
                 if self.stop_event and self.stop_event.is_set():
                     return
@@ -175,9 +169,6 @@ class AvitoParse:
                         f"Не удалось получить HTML для {url}, пробую заново через {self.config.pause_between_links} сек.")
                     time.sleep(self.config.pause_between_links)
                     continue
-
-                if not self.xlsx_handler and self.config.one_file_for_link:
-                    self.xlsx_handler = XLSXHandler(f"result/{_index + 1}.xlsx")
 
                 data_from_page = self.find_json_on_page(html_code=html_code)
                 try:
@@ -205,22 +196,10 @@ class AvitoParse:
                 if filter_ads:
                     self.__save_viewed(ads=filter_ads)
 
-                    if self.config.save_xlsx:
-                        ads_in_link.extend(filter_ads)
-
                 url = self.get_next_page_url(url=url)
 
                 logger.info(f"Пауза {self.config.pause_between_links} сек.")
                 time.sleep(self.config.pause_between_links)
-
-            if ads_in_link:
-                logger.info(f"Сохраняю в Excel {len(ads_in_link)} объявлений")
-                self.__save_data(ads=ads_in_link)
-            else:
-                logger.info("Сохранять нечего")
-
-            if self.config.one_file_for_link:
-                self.xlsx_handler = None
 
         logger.info(f"Хорошие запросы: {self.good_request_count}шт, плохие: {self.bad_request_count}шт")
 
@@ -441,22 +420,6 @@ class AvitoParse:
         published_time = datetime.utcfromtimestamp(timestamp_ms / 1000)
         return (now - published_time) <= timedelta(seconds=max_age_seconds)
 
-    def __get_file_title(self) -> str:
-        """Определяет название файла"""
-        title_file = 'all'
-        if self.config.keys_word_white_list:
-            title_file = "-".join(list(map(str.lower, self.config.keys_word_white_list)))
-            if len(title_file) > 50:
-                title_file = title_file[:50]
-
-        return f"result/{title_file}.xlsx"
-
-    def __save_data(self, ads: list[Item]) -> None:
-        """Сохраняет результат в файл keyword*.xlsx и в БД"""
-        try:
-            self.xlsx_handler.append_data_from_page(ads=ads)
-        except Exception as err:
-            logger.info(f"При сохранении в Excel ошибка {err}")
 
     def __save_viewed(self, ads: list[Item]) -> None:
         """Сохраняет просмотренные объявления"""

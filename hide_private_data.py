@@ -56,9 +56,9 @@ def _mask_url(url: str) -> str:
     return "***"
 
 
-def log_config(config, version: str):
+def log_config(config):
     """
     Безопасно логирует конфигурацию, скрывая чувствительные данные.
     """
     safe_config_str = mask_sensitive_data(str(config))
-    logger.info(f"Запуск AvitoParse v{version} с настройками:\n{safe_config_str}")
+    logger.info(f"Запуск AvitoParse с настройками:\n{safe_config_str}")
