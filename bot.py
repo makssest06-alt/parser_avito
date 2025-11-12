@@ -26,7 +26,7 @@ db = Database()
 
 # Тарифы
 SUBSCRIPTION_PLANS = {
-    "basic": {"name": "Базовый", "price": 299, "days": 30, "links_limit": 5},
+    "basic": {"name": "Базовый", "price": 10, "days": 30, "links_limit": 5},
     "premium": {"name": "Премиум", "price": 599, "days": 30, "links_limit": 20},
     "vip": {"name": "VIP", "price": 999, "days": 30, "links_limit": 100}
 }
