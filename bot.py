@@ -516,7 +516,7 @@ def check_pending_payments():
             time.sleep(60)
 
 def show_users_list(message):
-    """Показывает список пользователей администратору"""
+    """Показывает список пользователей администратору в виде файла"""
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
         bot.reply_to(message, "У вас нет прав для выполнения этой команды.")
@@ -535,7 +535,6 @@ def show_users_list(message):
                 LEFT JOIN user_links ul ON u.user_id = ul.user_id AND ul.is_active = TRUE
                 GROUP BY u.user_id
                 ORDER BY u.registration_date DESC
-                LIMIT 50
             ''')
             
             users = cursor.fetchall()
@@ -544,38 +543,68 @@ def show_users_list(message):
                 bot.reply_to(message, "В базе данных нет пользователей.")
                 return
             
-            users_text = "📊 *Список пользователей (последние 50):*\n\n"
+            # Создаем содержимое файла
+            file_content = "📊 Список пользователей\n\n"
+            file_content += f"Всего пользователей: {len(users)}\n"
+            file_content += f"Дата выгрузки: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            file_content += "=" * 80 + "\n\n"
             
             for i, user in enumerate(users, 1):
                 user_id, username, first_name, last_name, reg_date, is_active, sub_type, sub_end, links_count = user
                 
-                # Форматируем информацию о пользователе
                 user_info = f"{i}. ID: {user_id}\n"
-                user_info += f"   👤: {first_name or ''} {last_name or ''}\n"
-                user_info += f"   @: {username or 'нет'}\n"
-                user_info += f"   📅 Регистрация: {reg_date[:10] if reg_date else 'нет данных'}\n"
-                user_info += f"   🔗 Ссылок: {links_count}\n"
+                user_info += f"   Имя: {first_name or ''} {last_name or ''}\n"
+                user_info += f"   Username: @{username or 'нет'}\n"
+                user_info += f"   Дата регистрации: {reg_date[:10] if reg_date else 'нет данных'}\n"
+                user_info += f"   Количество ссылок: {links_count}\n"
                 
                 # Информация о подписке
                 if sub_type and sub_end:
-                    days_left = (datetime.strptime(sub_end[:10], '%Y-%m-%d') - datetime.now()).days
-                    user_info += f"   💎 Подписка: {sub_type} (до {sub_end[:10]}, осталось {days_left} дн.)\n"
+                    try:
+                        days_left = (datetime.strptime(sub_end[:10], '%Y-%m-%d') - datetime.now()).days
+                        user_info += f"   Подписка: {sub_type} (до {sub_end[:10]}, осталось {days_left} дн.)\n"
+                    except:
+                        user_info += f"   Подписка: {sub_type} (до {sub_end[:10]})\n"
                 else:
-                    user_info += f"   💎 Подписка: нет\n"
+                    user_info += f"   Подписка: нет\n"
                 
-                user_info += f"   ✅ Активен: {'да' if is_active else 'нет'}\n"
-                user_info += "   ──────────────\n"
+                user_info += f"   Активен: {'да' if is_active else 'нет'}\n"
+                user_info += "-" * 40 + "\n\n"
                 
-                # Если сообщение становится слишком длинным, отправляем часть
-                if len(users_text + user_info) > 4000:
-                    bot.send_message(message.chat.id, users_text, parse_mode='Markdown')
-                    users_text = user_info
-                else:
-                    users_text += user_info
+                file_content += user_info
             
-            # Отправляем оставшуюся часть
-            if users_text:
-                bot.send_message(message.chat.id, users_text, parse_mode='Markdown')
+            # Создаем временный файл
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.txt', delete=False) as f:
+                f.write(file_content)
+                temp_file_path = f.name
+            
+            # Отправляем файл
+            with open(temp_file_path, 'rb') as file_to_send:
+                bot.send_document(
+                    message.chat.id,
+                    file_to_send,
+                    caption=f"📊 Список пользователей ({len(users)} чел.)",
+                    visible_file_name=f"users_list_{datetime.now().strftime('%Y-%m-%d')}.txt"
+                )
+            
+            # Удаляем временный файл
+            os.unlink(temp_file_path)
+            
+            # Добавляем краткую статистику в сообщение
+            active_subscriptions = sum(1 for user in users if user[6] and user[7])  # sub_type and sub_end
+            total_links = sum(user[8] for user in users)  # links_count
+            
+            stats_message = (
+                f"📈 Краткая статистика:\n"
+                f"• Всего пользователей: {len(users)}\n"
+                f"• С активной подпиской: {active_subscriptions}\n"
+                f"• Всего ссылок для мониторинга: {total_links}"
+            )
+            
+            bot.send_message(message.chat.id, stats_message)
                 
             # Добавляем кнопки для управления
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
