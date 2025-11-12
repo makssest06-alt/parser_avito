@@ -3,7 +3,7 @@ import time
 
 from loguru import logger
 
-from models import Item
+from parser_cls import Item
 
 
 class SendAdToTg:
