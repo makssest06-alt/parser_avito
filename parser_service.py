@@ -3,7 +3,7 @@ import time
 import json
 import sqlite3
 from datetime import datetime
-from database import Database
+from Database import Database
 from dto import AvitoConfig
 from parser_cls import AvitoParse
 import logging

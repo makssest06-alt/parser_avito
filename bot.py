@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS
-from database import Database
+from Database import Database
 from payment_service import payment_service
 from dto import AvitoConfig
 from parser_cls import AvitoParse

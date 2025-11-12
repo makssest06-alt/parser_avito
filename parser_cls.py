@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from requests.cookies import RequestsCookieJar
 
 from common_data import HEADERS
-from db_service import SQLiteDBHandler
+from Database import Database
 from dto import Proxy, AvitoConfig
 from get_cookies import get_cookies
 from hide_private_data import log_config
@@ -37,7 +37,7 @@ class AvitoParse:
     ):
         self.config = config
         self.proxy_obj = self.get_proxy_obj()
-        self.db_handler = SQLiteDBHandler()
+        self.db_handler = Database()
         self.tg_handler = self.get_tg_handler()
         self.xlsx_handler = XLSXHandler(self.__get_file_title())
         self.stop_event = stop_event
