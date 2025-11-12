@@ -351,40 +351,57 @@ def handle_callback(call):
 
 def check_payment_status(user_id: int, payment_id: str, chat_id: int):
     """Проверяет статус платежа и активирует подписку при успешной оплате"""
-    status = payment_service.check_payment_status(payment_id)
-    
-    if status == 'succeeded':
-        payment_info = pending_payments.get(payment_id)
-        if payment_info and payment_info['user_id'] == user_id:
-            plan_id = payment_info['plan_id']
-            plan = SUBSCRIPTION_PLANS.get(plan_id)
-            
-            # Активируем подписку
-            db.add_subscription(user_id, plan_id, plan['days'])
-            
-            # Обновляем статус платежа в БД
-            db.add_payment(
-                user_id=user_id,
-                amount=plan['price'],
-                payment_system='yookassa',
-                payment_id=payment_id,
-                status='succeeded'
-            )
-            
-            # Удаляем из ожидающих
-            del pending_payments[payment_id]
-            
-            bot.send_message(
-                chat_id,
-                f"✅ Платеж подтвержден! Подписка {plan['name']} активирована на {plan['days']} дней!\n"
-                f"Теперь ты можешь добавить до {plan['links_limit']} ссылок для мониторинга."
-            )
+    try:
+        status = payment_service.check_payment_status(payment_id)
+        
+        if status == 'succeeded':
+            payment_info = pending_payments.get(payment_id)
+            if payment_info and payment_info['user_id'] == user_id:
+                plan_id = payment_info['plan_id']
+                plan = SUBSCRIPTION_PLANS.get(plan_id)
+                
+                if plan:
+                    # Активируем подписку
+                    db.add_subscription(user_id, plan_id, plan['days'])
+                    
+                    # Обновляем статус платежа в БД
+                    db.add_payment(
+                        user_id=user_id,
+                        amount=plan['price'],
+                        payment_system='yookassa',
+                        payment_id=payment_id,
+                        status='succeeded'
+                    )
+                    
+                    # Удаляем из ожидающих
+                    del pending_payments[payment_id]
+                    
+                    # Обновляем клавиатуру пользователя
+                    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    
+                    bot.send_message(
+                        chat_id,
+                        f"✅ *Платеж подтвержден!*\n\n"
+                        f"💎 Подписка *{plan['name']}* активирована на *{plan['days']}* дней!\n"
+                        f"🔗 Лимит ссылок: *{plan['links_limit']}*\n\n"
+                        f"Теперь ты можешь добавить ссылки для мониторинга через меню 'Добавить ссылку'.",
+                        parse_mode='Markdown',
+                        reply_markup=markup
+                    )
+                else:
+                    bot.send_message(chat_id, "❌ Информация о тарифе не найдена.")
+            else:
+                bot.send_message(chat_id, "❌ Информация о платеже не найдена.")
+        elif status == 'pending':
+            bot.send_message(chat_id, "⏳ Платеж еще обрабатывается. Попробуйте проверить позже.")
+        elif status == 'canceled':
+            bot.send_message(chat_id, "❌ Платеж отменен.")
         else:
-            bot.send_message(chat_id, "❌ Информация о платеже не найдена.")
-    elif status == 'pending':
-        bot.send_message(chat_id, "⏳ Платеж еще обрабатывается. Попробуйте проверить позже.")
-    else:
-        bot.send_message(chat_id, "❌ Платеж не найден или отменен.")
+            bot.send_message(chat_id, f"❌ Статус платежа: {status}")
+    except Exception as e:
+        logger.error(f"Ошибка при проверке платежа {payment_id}: {e}")
+        bot.send_message(chat_id, "❌ Произошла ошибка при проверке платежа. Попробуйте позже.")
 
 def show_proxy_settings(message):
     """Показывает настройки прокси"""
