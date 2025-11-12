@@ -5,7 +5,8 @@ import sqlite3
 from datetime import datetime
 from Database import Database
 from dto import AvitoConfig
-from parser_cls import AvitoParse, Item
+from parser_cls import AvitoParse
+from models import Item
 import logging
 
 logger = logging.getLogger(__name__)

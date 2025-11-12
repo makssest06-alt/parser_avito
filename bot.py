@@ -8,6 +8,7 @@ from Database import Database
 from payment_service import payment_service
 from dto import AvitoConfig
 from parser_cls import AvitoParse
+from models import Item
 from parser_service import UserTgHandler
 import threading
 import time
