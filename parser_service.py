@@ -124,9 +124,9 @@ class ParserService:
             proxy_string=settings.get('proxy_string', ''),
             proxy_change_url=settings.get('proxy_change_url', ''),
             tg_notifications=settings.get('tg_notifications', True),
-            one_time_start=False,  # Изменено на False для непрерывного парсинга
-            count=3,  # Увеличиваем количество страниц для парсинга
-            pause_between_links=10,  # Увеличиваем паузу между запросами
+            one_time_start=False,  # Непрерывный парсинг
+            count=1,  # Парсим только первую страницу
+            pause_between_links=10,  # Пауза между запросами
             max_count_of_retry=5,
             save_xlsx=False
         )
@@ -144,19 +144,15 @@ class ParserService:
             if config.tg_notifications and self.bot:
                 parser.tg_handler = UserTgHandler(user_id, self.bot)
             
-            # Запускаем парсинг с ограничением по времени
+            # Запускаем парсинг в отдельном потоке
             def run_parse():
                 parser.parse()
             
-            # Запускаем в отдельном потоке с таймаутом
             parse_thread = threading.Thread(target=run_parse)
             parse_thread.start()
-            parse_thread.join(timeout=300)  # 5 минут на парсинг всех страниц
+            # Не ждем завершения, чтобы мониторинг мог работать с другими пользователями
+            # Поток будет работать до stop_event
             
-            # Если поток еще жив, останавливаем
-            if parse_thread.is_alive():
-                logger.warning(f"Парсинг для пользователя {user_id} превысил время выполнения")
-                
         except Exception as e:
             logger.error(f"Ошибка парсинга для пользователя {user_id}: {e}")
 
