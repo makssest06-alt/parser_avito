@@ -109,6 +109,12 @@ class ParserService:
 
     def _create_config(self, links, settings, user_id):
         """Создает конфиг для парсера"""
+        # Если прокси не установлен в настройках пользователя, используем новый прокси
+        proxy_string = settings.get('proxy_string', '')
+        if not proxy_string:
+            # Устанавливаем новый прокси без авторизации
+            proxy_string = 'p19221.ltespace.net:19221'
+            
         return AvitoConfig(
             urls=[link[0] for link in links],
             min_price=settings['min_price'],
@@ -121,8 +127,8 @@ class ParserService:
             ignore_reserv=settings['ignore_reserv'],
             ignore_promotion=settings['ignore_promotion'],
             parse_views=settings['parse_views'],
-            proxy_string=settings.get('proxy_string', ''),
-            proxy_change_url=settings.get('proxy_change_url', ''),
+            proxy_string=proxy_string,
+            proxy_change_url='',  # Пустая строка, так как смена IP недоступна
             tg_notifications=settings.get('tg_notifications', True),
             one_time_start=False,  # Непрерывный парсинг
             count=1,  # Парсим только первую страницу
