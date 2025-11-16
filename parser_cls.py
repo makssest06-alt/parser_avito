@@ -157,17 +157,18 @@ class AvitoParse:
 
     def parse(self):
         for _index, url in enumerate(self.config.urls):
+            current_url = url
             for i in range(0, self.config.count):
                 if self.stop_event and self.stop_event.is_set():
                     return
                 if DEBUG_MODE:
                     html_code = open("response.txt", "r", encoding="utf-8").read()
                 else:
-                    html_code = self.fetch_data(url=url, retries=self.config.max_count_of_retry)
+                    html_code = self.fetch_data(url=current_url, retries=self.config.max_count_of_retry)
 
                 if not html_code:
                     logger.warning(
-                        f"Не удалось получить HTML для {url}, пробую заново через {self.config.pause_between_links} сек.")
+                        f"Не удалось получить HTML для {current_url}, пробую заново через {self.config.pause_between_links} сек.")
                     time.sleep(self.config.pause_between_links)
                     continue
 
@@ -197,7 +198,12 @@ class AvitoParse:
                 if filter_ads:
                     self.__save_viewed(ads=filter_ads)
 
-                url = self.get_next_page_url(url=url)
+                # Получаем следующую страницу
+                next_url = self.get_next_page_url(url=current_url)
+                if next_url == current_url:
+                    logger.info("Достигнута последняя страница")
+                    break
+                current_url = next_url
 
                 logger.info(f"Пауза {self.config.pause_between_links} сек.")
                 time.sleep(self.config.pause_between_links)
@@ -436,8 +442,7 @@ class AvitoParse:
             query_params = parse_qs(url_parts.query)
             current_page = int(query_params.get('p', [1])[0])
             query_params['p'] = current_page + 1
-            if self.config.one_time_start:
-                logger.debug(f"Страница {current_page}")
+            logger.debug(f"Страница {current_page} -> {current_page + 1}")
 
             new_query = urlencode(query_params, doseq=True)
             next_url = urlunparse((url_parts.scheme, url_parts.netloc, url_parts.path, url_parts.params, new_query,
@@ -445,6 +450,7 @@ class AvitoParse:
             return next_url
         except Exception as err:
             logger.error(f"Не смог сформировать ссылку на следующую страницу для {url}. Ошибка: {err}")
+            return url
 
 
 if __name__ == "__main__":
