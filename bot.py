@@ -423,6 +423,14 @@ def check_payment_status(user_id: int, payment_id: str, chat_id: int):
                 payment_info['pending_message_sent'] = True
         elif status == 'canceled':
             bot.send_message(chat_id, "❌ Платеж отменен.")
+            # Обновляем статус платежа в БД
+            db.add_payment(
+                user_id=user_id,
+                amount=0,
+                payment_system='yookassa',
+                payment_id=payment_id,
+                status='canceled'
+            )
             # Удаляем из ожидающих при отмене
             if payment_id in pending_payments:
                 del pending_payments[payment_id]
@@ -494,19 +502,33 @@ def check_pending_payments():
                         markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
                         markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
                         
-                        bot.send_message(
-                            user_id,
-                            f"✅ *Платеж подтвержден!*\n\n"
-                            f"💎 Подписка *{plan['name']}* активирована на *{plan['days']}* дней!\n"
-                            f"🔗 Лимит ссылок: *{plan['links_limit']}*\n\n"
-                            f"Теперь ты можешь добавить ссылки для мониторинга через меню 'Добавить ссылку'.",
-                            parse_mode='Markdown',
-                            reply_markup=markup
-                        )
+                        try:
+                            bot.send_message(
+                                user_id,
+                                f"✅ *Платеж подтвержден!*\n\n"
+                                f"💎 Подписка *{plan['name']}* активирована на *{plan['days']}* дней!\n"
+                                f"🔗 Лимит ссылок: *{plan['links_limit']}*\n\n"
+                                f"Теперь ты можешь добавить ссылки для мониторинга через меню 'Добавить ссылку'.",
+                                parse_mode='Markdown',
+                                reply_markup=markup
+                            )
+                        except Exception as e:
+                            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
                         
                         # Удаляем из ожидающих
                         del pending_payments[payment_id]
                 elif status == 'canceled':
+                    # Обновляем статус платежа в БД
+                    try:
+                        db.add_payment(
+                            user_id=payment_info['user_id'],
+                            amount=0,
+                            payment_system='yookassa',
+                            payment_id=payment_id,
+                            status='canceled'
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка при обновлении отмененного платежа {payment_id}: {e}")
                     # Удаляем отмененные платежи
                     if payment_id in pending_payments:
                         del pending_payments[payment_id]
