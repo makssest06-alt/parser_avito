@@ -107,6 +107,52 @@ def help_command(message):
     bot.reply_to(message, "Это помощь для всех пользователей!")
 
 # Обработчик текстовых сообщений (кнопки)
+@bot.message_handler(commands=['set_proxy'])
+def set_proxy_command(message):
+    """Обработчик команды для установки прокси"""
+    user_id = message.from_user.id
+    subscription = db.get_user_subscription(user_id)
+    
+    if not subscription:
+        bot.reply_to(message, "❌ Для настройки прокси нужна активная подписка!")
+        return
+    
+    # Получаем текст после команды
+    command_parts = message.text.split(' ', 1)
+    if len(command_parts) < 2:
+        bot.reply_to(message, 
+                    "❌ Использование: /set_proxy [прокси]\n\n"
+                    "Пример:\n"
+                    "/set_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd\n\n"
+                    "Чтобы сбросить прокси:\n"
+                    "/set_proxy none")
+        return
+    
+    proxy_string = command_parts[1].strip()
+    
+    if proxy_string.lower() == 'none':
+        proxy_string = ''
+        bot.reply_to(message, "✅ Прокси сброшен. Будут использоваться настройки по умолчанию.")
+    else:
+        # Простая валидация формата прокси
+        if '@' not in proxy_string or ':' not in proxy_string:
+            bot.reply_to(message, 
+                        "❌ Неверный формат прокси!\n\n"
+                        "Правильный формат:\n"
+                        "сервер:порт@логин:пароль\n\n"
+                        "Пример:\n"
+                        "p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
+            return
+        bot.reply_to(message, "✅ Прокси успешно установлен!")
+    
+    # Обновляем настройки пользователя
+    settings = db.get_parser_settings(user_id)
+    if not settings:
+        settings = {}
+    
+    settings['proxy_string'] = proxy_string
+    db.update_parser_settings(user_id, settings)
+
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
@@ -451,15 +497,26 @@ def show_proxy_settings(message):
             'proxy_change_url': ''
         }
     
+    # Маскируем пароль в прокси для безопасности
+    proxy_display = settings['proxy_string']
+    if proxy_display and '@' in proxy_display:
+        server_part, auth_part = proxy_display.split('@', 1)
+        if ':' in auth_part:
+            login, password = auth_part.split(':', 1)
+            masked_auth = f"{login}:{'*' * len(password)}"
+            proxy_display = f"{server_part}@{masked_auth}"
+    
     settings_text = (
         f"⚙️ *Текущие настройки прокси:*\n\n"
-        f"• Прокси: {settings['proxy_string'] or 'Не настроен'}\n"
+        f"• Прокси: {proxy_display or 'Не настроен (используется прокси по умолчанию)'}\n"
         f"• URL смены IP: {settings['proxy_change_url'] or 'Не настроен'}\n\n"
         f"Используйте команды для изменения настроек:\n"
         f"/set_proxy [прокси] - установить прокси\n"
-        f"/set_proxy_url [url] - установить URL смены IP\n\n"
-        f"Формат прокси: username:password@proxy.site:port\n"
-        f"Пример: user123:pass456@proxy.mobileproxy.space:10000"
+        f"/set_proxy none - сбросить прокси\n\n"
+        f"*Формат прокси:*\n"
+        f"сервер:порт@логин:пароль\n\n"
+        f"*Пример:*\n"
+        f"`/set_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd`"
     )
     
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)

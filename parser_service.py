@@ -112,8 +112,8 @@ class ParserService:
         # Если прокси не установлен в настройках пользователя, используем новый прокси
         proxy_string = settings.get('proxy_string', '')
         if not proxy_string:
-            # Устанавливаем новый прокси без авторизации
-            proxy_string = 'p19221.ltespace.net:19221'
+            # Устанавливаем новый прокси с авторизацией
+            proxy_string = 'p19221.ltespace.net:19221@hsh7puzc:bmdocryd'
             
         return AvitoConfig(
             urls=[link[0] for link in links],
