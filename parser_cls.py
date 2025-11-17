@@ -58,12 +58,13 @@ class AvitoParse:
             self.tg_handler.send_to_tg(ad=ad)
 
     def get_proxy_obj(self) -> Proxy | None:
-        if all([self.config.proxy_string, self.config.proxy_change_url]):
-            return Proxy(
-                proxy_string=self.config.proxy_string,
-                change_ip_link=self.config.proxy_change_url
-            )
-        logger.info("Работаем без прокси")
+        # Используем мобильные прокси вместо пользовательских настроек
+        from mobile_proxy_manager import proxy_manager
+        proxy = proxy_manager.get_random_proxy()
+        if proxy:
+            logger.info(f"Используем мобильный прокси: {proxy.proxy_string}")
+            return proxy
+        logger.info("Работаем без прокси - нет доступных мобильных прокси")
         return None
 
     def get_cookies(self, max_retries: int = 1, delay: float = 2.0) -> dict | None:
@@ -110,7 +111,8 @@ class AvitoParse:
         proxy_data = None
         if self.proxy_obj:
             proxy_data = {
-                          "https": f"http://{self.config.proxy_string}"
+                "https": f"http://{self.proxy_obj.proxy_string}",
+                "http": f"http://{self.proxy_obj.proxy_string}"
             }
 
         for attempt in range(1, retries + 1):
@@ -139,11 +141,24 @@ class AvitoParse:
                         self.cookies = self.get_cookies()
                     raise requests.RequestsError(f"Слишком много запросов: {response.status_code}")
                 if response.status_code in [403, 302]:
+                    # Помечаем прокси как заблокированный
+                    if self.proxy_obj:
+                        from mobile_proxy_manager import proxy_manager
+                        proxy_manager.mark_proxy_failed(
+                            self.proxy_obj.proxy_string, 
+                            f"Заблокирован Авито: {response.status_code}"
+                        )
                     self.cookies = self.get_cookies()
                     raise requests.RequestsError(f"Заблокирован: {response.status_code}")
 
                 self.save_cookies()
                 self.good_request_count += 1
+                
+                # Помечаем прокси как успешный
+                if self.proxy_obj:
+                    from mobile_proxy_manager import proxy_manager
+                    proxy_manager.mark_proxy_success(self.proxy_obj.proxy_string)
+                
                 return response.text
             except requests.RequestsError as e:
                 logger.debug(f"Попытка {attempt} закончилась неуспешно: {e}")
