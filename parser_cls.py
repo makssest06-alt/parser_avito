@@ -63,6 +63,14 @@ class AvitoParse:
         proxy = proxy_manager.get_random_proxy()
         if proxy:
             logger.info(f"Используем мобильный прокси: {proxy.proxy_string}")
+            # Test the proxy format
+            proxy_string = proxy.proxy_string
+            if '@' in proxy_string:
+                host_port_part, auth_part = proxy_string.split('@', 1)
+                if ':' in auth_part:
+                    login, password = auth_part.split(':', 1)
+                    formatted_proxy = f"http://{login}:{password}@{host_port_part}"
+                    logger.debug(f"Formatted proxy URL: {formatted_proxy}")
             return proxy
         logger.info("Работаем без прокси - нет доступных мобильных прокси")
         return None
@@ -110,10 +118,25 @@ class AvitoParse:
     def fetch_data(self, url, retries=3, backoff_factor=1):
         proxy_data = None
         if self.proxy_obj:
+            # Parse the proxy string to extract components
+            proxy_string = self.proxy_obj.proxy_string
+            if '@' in proxy_string:
+                # Format: host:port@login:password
+                host_port_part, auth_part = proxy_string.split('@', 1)
+                if ':' in auth_part:
+                    login, password = auth_part.split(':', 1)
+                    # Reconstruct in the correct format: http://login:password@host:port
+                    formatted_proxy = f"http://{login}:{password}@{host_port_part}"
+                else:
+                    formatted_proxy = f"http://{host_port_part}"
+            else:
+                formatted_proxy = f"http://{proxy_string}"
+            
             proxy_data = {
-                "https": f"http://{self.proxy_obj.proxy_string}",
-                "http": f"http://{self.proxy_obj.proxy_string}"
+                "https": formatted_proxy,
+                "http": formatted_proxy
             }
+            logger.debug(f"Using proxy: {formatted_proxy}")
 
         for attempt in range(1, retries + 1):
             if self.stop_event and self.stop_event.is_set():
@@ -150,6 +173,9 @@ class AvitoParse:
                         )
                     self.cookies = self.get_cookies()
                     raise requests.RequestsError(f"Заблокирован: {response.status_code}")
+                elif response.status_code != 200:
+                    logger.warning(f"Unexpected status code: {response.status_code}")
+                    raise requests.RequestsError(f"Status code: {response.status_code}")
 
                 self.save_cookies()
                 self.good_request_count += 1

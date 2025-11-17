@@ -48,15 +48,28 @@ class PlaywrightClient:
         try:
             self.proxy.proxy_string = self.del_protocol(proxy_string=self.proxy.proxy_string)
             if "@" in self.proxy.proxy_string:
-                ip_port, user_pass = self.proxy.proxy_string.split("@")
-                if "." in user_pass:
-                    ip_port, user_pass = user_pass, ip_port
-                login, password = str(user_pass).split(":")
+                # Format: host:port@login:password
+                host_port, user_pass = self.proxy.proxy_string.split("@")
+                if ":" in user_pass:
+                    login, password = user_pass.split(":", 1)
+                else:
+                    login, password = "", user_pass
+                # Ensure host_port is in the correct format
+                if ":" not in host_port:
+                    raise ValueError("Invalid host:port format")
+                ip_port = f"{host_port}"
             else:
-                login, password, ip, port = self.proxy.proxy_string.split(":")
-                if "." in login:
-                    login, password, ip, port = ip, port, login, password
-                ip_port = f"{ip}:{port}"
+                # Format: host:port:login:password
+                parts = self.proxy.proxy_string.split(":")
+                if len(parts) == 4:
+                    host, port, login, password = parts
+                    ip_port = f"{host}:{port}"
+                elif len(parts) == 2:
+                    host, port = parts
+                    login, password = "", ""
+                    ip_port = f"{host}:{port}"
+                else:
+                    raise ValueError("Invalid proxy format")
 
             ip_port = self.check_protocol(ip_port=ip_port)
 
@@ -67,9 +80,9 @@ class PlaywrightClient:
                 change_ip_link=self.proxy.change_ip_link
             )
         except Exception as err:
-            logger.error(err)
+            logger.error(f"Error parsing proxy: {err}")
             logger.critical("Прокси в таком формате не поддерживаются. "
-                            "Используй: ip:port@user:pass или ip:port:user:pass")
+                            "Используй: host:port@login:password")
 
     @staticmethod
     def parse_cookie_string(cookie_str: str) -> dict:
