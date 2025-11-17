@@ -67,7 +67,7 @@ def send_welcome(message):
         if subscription:
             # Пользователь с активной подпиской
             markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-            markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+            markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Моя подписка')
             bot.send_message(
                 message.chat.id,
                 f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
@@ -107,51 +107,79 @@ def help_command(message):
     bot.reply_to(message, "Это помощь для всех пользователей!")
 
 # Обработчик текстовых сообщений (кнопки)
-@bot.message_handler(commands=['set_proxy'])
-def set_proxy_command(message):
-    """Обработчик команды для установки прокси"""
+@bot.message_handler(commands=['add_proxy'])
+def add_proxy_command(message):
+    """Обработчик команды для добавления мобильного прокси (только для админов)"""
     user_id = message.from_user.id
-    subscription = db.get_user_subscription(user_id)
     
-    if not subscription:
-        bot.reply_to(message, "❌ Для настройки прокси нужна активная подписка!")
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
         return
     
     # Получаем текст после команды
     command_parts = message.text.split(' ', 1)
     if len(command_parts) < 2:
         bot.reply_to(message, 
-                    "❌ Использование: /set_proxy [прокси]\n\n"
+                    "❌ Использование: /add_proxy [прокси]\n\n"
+                    "Формат: host:port@login:password\n\n"
                     "Пример:\n"
-                    "/set_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd\n\n"
-                    "Чтобы сбросить прокси:\n"
-                    "/set_proxy none")
+                    "/add_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
         return
     
     proxy_string = command_parts[1].strip()
     
-    if proxy_string.lower() == 'none':
-        proxy_string = ''
-        bot.reply_to(message, "✅ Прокси сброшен. Будут использоваться настройки по умолчанию.")
-    else:
-        # Простая валидация формата прокси
-        if '@' not in proxy_string or ':' not in proxy_string:
-            bot.reply_to(message, 
-                        "❌ Неверный формат прокси!\n\n"
-                        "Правильный формат:\n"
-                        "сервер:порт@логин:пароль\n\n"
-                        "Пример:\n"
-                        "p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
+    # Валидация формата прокси
+    if '@' not in proxy_string or proxy_string.count(':') < 2:
+        bot.reply_to(message, 
+                    "❌ Неверный формат прокси!\n\n"
+                    "Правильный формат:\n"
+                    "host:port@login:password\n\n"
+                    "Пример:\n"
+                    "p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
+        return
+    
+    try:
+        from mobile_proxy_manager import proxy_manager
+        proxy_manager.add_proxy(proxy_string)
+        bot.reply_to(message, f"✅ Мобильный прокси успешно добавлен!")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при добавлении прокси: {str(e)}")
+
+@bot.message_handler(commands=['proxy_status'])
+def proxy_status_command(message):
+    """Показывает статус мобильных прокси (только для админов)"""
+    user_id = message.from_user.id
+    
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+    
+    try:
+        from mobile_proxy_manager import proxy_manager
+        proxies = proxy_manager.get_proxy_status()
+        
+        if not proxies:
+            bot.reply_to(message, "📊 Нет мобильных прокси в базе")
             return
-        bot.reply_to(message, "✅ Прокси успешно установлен!")
-    
-    # Обновляем настройки пользователя
-    settings = db.get_parser_settings(user_id)
-    if not settings:
-        settings = {}
-    
-    settings['proxy_string'] = proxy_string
-    db.update_parser_settings(user_id, settings)
+        
+        status_text = "📊 *Статус мобильных прокси:*\n\n"
+        
+        for proxy in proxies:
+            proxy_string, is_active, success_count, fail_count, last_fail_reason = proxy
+            status = "✅ Активен" if is_active else "❌ Отключен"
+            status_text += (
+                f"• `{proxy_string}`\n"
+                f"  Статус: {status}\n"
+                f"  Успешно: {success_count}, Ошибок: {fail_count}\n"
+            )
+            if last_fail_reason:
+                status_text += f"  Последняя ошибка: {last_fail_reason}\n"
+            status_text += "\n"
+        
+        bot.reply_to(message, status_text, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при получении статуса прокси: {str(e)}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -174,7 +202,7 @@ def handle_all_messages(message):
             if subscription:
                 # Пользователь с активной подпиской
                 markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка', 'Вернуться к выбору режима')
+                markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Моя подписка', 'Вернуться к выбору режима')
                 bot.send_message(
                     message.chat.id,
                     f"Привет! Твоя подписка активна до {subscription['end_date'][:10]}\n"
@@ -295,11 +323,11 @@ def handle_all_messages(message):
                     links_text = "Твои ссылки:\n\n" + "\n".join([f"• {link[0]}" for link in links])
                     # Добавляем кнопку тестового парсинга
                     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Моя подписка')
                     bot.reply_to(message, links_text, reply_markup=markup)
                 else:
                     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                    markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Настройки парсера', 'Моя подписка')
                     bot.reply_to(message, "У тебя пока нет добавленных ссылок.", reply_markup=markup)
             else:
                 bot.reply_to(message, "Для просмотра ссылок нужна активная подписка!")
@@ -309,11 +337,7 @@ def handle_all_messages(message):
                 show_parser_settings(message)
             else:
                 bot.reply_to(message, "Для настройки парсера нужна активная подписка!")
-        elif text == 'Настройки прокси':
-            if subscription:
-                show_proxy_settings(message)
-            else:
-                bot.reply_to(message, "Для настройки прокси нужна активная подписка!")
+        # Убрана кнопка "Настройки прокси" для пользователей
         elif text == 'Тест парсера':
             start_simple_user_test_parsing(message)
         else:
@@ -486,48 +510,7 @@ def check_payment_status(user_id: int, payment_id: str, chat_id: int):
         logger.error(f"Ошибка при проверке платежа {payment_id}: {e}")
         bot.send_message(chat_id, "❌ Произошла ошибка при проверке платежа. Попробуйте позже.")
 
-def show_proxy_settings(message):
-    """Показывает настройки прокси"""
-    user_id = message.from_user.id
-    settings = db.get_parser_settings(user_id)
-    
-    if not settings:
-        settings = {
-            'proxy_string': '',
-            'proxy_change_url': ''
-        }
-    
-    # Маскируем пароль в прокси для безопасности
-    proxy_display = settings['proxy_string']
-    if proxy_display and '@' in proxy_display:
-        server_part, auth_part = proxy_display.split('@', 1)
-        if ':' in auth_part:
-            login, password = auth_part.split(':', 1)
-            masked_auth = f"{login}:{'*' * len(password)}"
-            proxy_display = f"{server_part}@{masked_auth}"
-    
-    settings_text = (
-        f"⚙️ *Текущие настройки прокси:*\n\n"
-        f"• Прокси: {proxy_display or 'Не настроен (используется прокси по умолчанию)'}\n"
-        f"• URL смены IP: {settings['proxy_change_url'] or 'Не настроен'}\n\n"
-        f"Используйте команды для изменения настроек:\n"
-        f"/set_proxy [прокси] - установить прокси\n"
-        f"/set_proxy none - сбросить прокси\n\n"
-        f"*Формат прокси:*\n"
-        f"сервер:порт@логин:пароль\n\n"
-        f"*Пример:*\n"
-        f"`/set_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd`"
-    )
-    
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add('Изменить настройки прокси', 'Вернуться в меню')
-    
-    bot.send_message(
-        message.chat.id,
-        settings_text,
-        reply_markup=markup,
-        parse_mode='Markdown'
-    )
+# Убрана функция show_proxy_settings, так как пользователи больше не могут настраивать прокси
 
 # Фоновая проверка платежей
 def check_pending_payments():
