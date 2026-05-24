@@ -31,6 +31,7 @@ class ParserChannel:
     fail_count: int
     success_count: int
     last_unblock_time: float
+    last_error: str | None
 
 
 class ChannelManager:
@@ -51,7 +52,7 @@ class ChannelManager:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
-                       pc.fail_count, pc.success_count, pc.last_unblock_time
+                       pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 WHERE mp.is_active = TRUE
@@ -66,6 +67,9 @@ class ChannelManager:
             return None
 
         channel = self._row_to_channel(row)
+        if self._unblock_before_reuse(channel):
+            channel = self.get_channel(channel.id)
+
         if not channel.cookies and self.api_client:
             if not self.refresh_cookies(channel):
                 self.cooldown_channel(channel, "Не удалось получить cookies", minutes=10)
@@ -81,7 +85,7 @@ class ChannelManager:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT id, proxy_string, spfa_id, cookies_json, user_agent,
-                       fail_count, success_count, last_unblock_time
+                       fail_count, success_count, last_unblock_time, last_error
                 FROM parser_channels
                 WHERE id = ?
             ''', (channel_id,))
@@ -93,6 +97,7 @@ class ChannelManager:
             conn.execute('''
                 UPDATE parser_channels
                 SET success_count = success_count + 1,
+                    fail_count = 0,
                     status = 'ready',
                     last_error = NULL,
                     cooldown_until = NULL,
@@ -103,6 +108,7 @@ class ChannelManager:
             conn.commit()
 
     def cooldown_channel(self, channel: ParserChannel, reason: str, minutes: int = 15):
+        minutes = self._cooldown_minutes(reason, channel.fail_count + 1, default_minutes=minutes)
         cooldown_until = datetime.now() + timedelta(minutes=minutes)
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''
@@ -196,7 +202,45 @@ class ChannelManager:
             fail_count=row[5] or 0,
             success_count=row[6] or 0,
             last_unblock_time=row[7] or 0,
+            last_error=row[8],
         )
+
+    def _unblock_before_reuse(self, channel: ParserChannel) -> bool:
+        """Runs free SPFA unblock before retrying a channel that previously hit 403."""
+        if not self.api_client or not channel.spfa_id or not channel.last_error:
+            return False
+        if "403" not in channel.last_error:
+            return False
+        if time.time() - channel.last_unblock_time <= 60:
+            return False
+
+        logger.info(f"Канал #{channel.id}: перед повторным использованием запускаем free unblock cookies #{channel.spfa_id}.")
+        if not self.api_client.unblock_session(channel.spfa_id):
+            return False
+
+        time.sleep(5)
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET last_unblock_time = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (time.time(), channel.id))
+            conn.commit()
+        return True
+
+    @staticmethod
+    def _cooldown_minutes(reason: str, fail_count: int, default_minutes: int) -> int:
+        if "403" not in reason:
+            return default_minutes
+        if fail_count <= 1:
+            return max(default_minutes, 15)
+        if fail_count == 2:
+            return max(default_minutes, 30)
+        if fail_count == 3:
+            return max(default_minutes, 60)
+        if fail_count == 4:
+            return max(default_minutes, 180)
+        return max(default_minutes, 360)
 
     @staticmethod
     def _format_proxy(proxy_string: str) -> str:
