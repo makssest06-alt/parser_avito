@@ -54,6 +54,7 @@ class ChannelManager:
         self.api_client = SpfaApiClient(token) if token else None
         self._add_env_proxy()
         self._ensure_channels_for_active_proxies()
+        self._sync_channel_status_for_proxy_activity()
 
     def acquire_channel(self) -> Optional[ParserChannel]:
         """Returns the least recently used channel that is not cooling down."""
@@ -201,6 +202,25 @@ class ChannelManager:
             cursor.execute('''
                 INSERT OR IGNORE INTO parser_channels (proxy_string)
                 SELECT proxy_string FROM mobile_proxies WHERE is_active = TRUE
+            ''')
+            conn.commit()
+
+    def _sync_channel_status_for_proxy_activity(self):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET status = 'disabled', updated_date = CURRENT_TIMESTAMP
+                WHERE proxy_string IN (
+                    SELECT proxy_string FROM mobile_proxies WHERE is_active = FALSE
+                )
+            ''')
+            conn.execute('''
+                UPDATE parser_channels
+                SET status = 'ready', updated_date = CURRENT_TIMESTAMP
+                WHERE status = 'disabled'
+                  AND proxy_string IN (
+                    SELECT proxy_string FROM mobile_proxies WHERE is_active = TRUE
+                  )
             ''')
             conn.commit()
 
