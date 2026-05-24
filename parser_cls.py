@@ -11,21 +11,19 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests
 from loguru import logger
 from pydantic import ValidationError
-from requests.cookies import RequestsCookieJar
 from typing import List
 
 from common_data import HEADERS
 from database import Database
 from dto import Proxy, AvitoConfig
-from get_cookies import get_cookies
-from hide_private_data import log_config
-from load_config import load_avito_config
 from tg_sender import SendAdToTg
 from models import Item, ItemsResponse
+from parser.http.client import AvitoHttpClient
+from parser.cookies.manager import CookiesManager
+from parser.http.exceptions import BlockError, ProxyError, FetchError
 
 DEBUG_MODE = False
-COOKIES_FILE = "cookies.json"
-SESSION_FILE = "avito_session.json"
+
 
 logger.add("logs/app.log", rotation="5 MB", retention="5 days", level="DEBUG")
 
@@ -42,14 +40,15 @@ class AvitoParse:
         self.tg_handler = self.get_tg_handler()
         self.xlsx_handler = None
         self.stop_event = stop_event
-        self.cookies = None
-        self.session = requests.Session()
-        self.headers = HEADERS.copy()
-        self.load_cookies()
+        
+        self.http_client = AvitoHttpClient(use_random_impersonate=True)
+        self.cookies_manager = CookiesManager()
+        
         self.good_request_count = 0
         self.bad_request_count = 0
 
-        log_config(config=self.config)
+        # log_config(config=self.config) # Temporarily removed or you can re-import it
+
 
     def get_tg_handler(self) -> SendAdToTg | None:
         if all([self.config.tg_token, self.config.tg_chat_id]):
@@ -61,165 +60,76 @@ class AvitoParse:
             self.tg_handler.send_to_tg(ad=ad)
 
     def get_proxy_obj(self) -> Proxy | None:
-        # Используем мобильные прокси вместо пользовательских настроек
         from mobile_proxy_manager import proxy_manager
         proxy = proxy_manager.get_random_proxy()
         if proxy:
-            logger.info(f"Используем мобильный прокси: {proxy.proxy_string}")
-            # Test the proxy format
-            proxy_string = proxy.proxy_string
-            if '@' in proxy_string:
-                host_port_part, auth_part = proxy_string.split('@', 1)
-                if ':' in auth_part:
-                    login, password = auth_part.split(':', 1)
-                    formatted_proxy = f"http://{login}:{password}@{host_port_part}"
-                    logger.debug(f"Formatted proxy URL: {formatted_proxy}")
             return proxy
-        logger.info("Работаем без прокси - нет доступных мобильных прокси")
         return None
 
-    def get_cookies(self, max_retries: int = 1, delay: float = 2.0) -> dict | None:
-        for attempt in range(1, max_retries + 1):
-            if self.stop_event and self.stop_event.is_set():
-                return None
+    def get_formatted_proxy(self) -> str | None:
+        if not self.proxy_obj:
+            return None
+        proxy_string = self.proxy_obj.proxy_string
+        
+        # Если прокси уже отформатирован с http/https
+        if proxy_string.startswith("http://") or proxy_string.startswith("https://"):
+            return proxy_string
 
-            try:
-                cookies, user_agent = asyncio.run(
-                    get_cookies(proxy=self.proxy_obj, headless=True, stop_event=self.stop_event))
-                if cookies:
-                    logger.info(f"[get_cookies] Успешно получены cookies с попытки {attempt}")
-
-                    self.headers["user-agent"] = user_agent
-                    return cookies
-                else:
-                    raise ValueError("Пустой результат cookies")
-            except Exception as e:
-                logger.warning(f"[get_cookies] Попытка {attempt} не удалась: {e}")
-                if attempt < max_retries:
-                    time.sleep(delay * attempt)  # увеличиваем задержку
-                else:
-                    logger.error(f"[get_cookies] Все {max_retries} попытки не удались")
-                    return None
-
-    def save_cookies(self) -> None:
-        """Сохраняет cookies и user-agent текущей сессии."""
-        cookies = {**(self.cookies or {}), **self.session.cookies.get_dict()}
-        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(cookies, f)
-        with open(SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump({"cookies": cookies, "user_agent": self.headers.get("user-agent")}, f)
-
-    def load_cookies(self) -> None:
-        """Загружает cookies и user-agent из ручной Avito-сессии."""
-        try:
-            with open(SESSION_FILE, "r", encoding="utf-8") as f:
-                session_data = json.load(f)
-            cookies = session_data.get("cookies", {})
-            user_agent = session_data.get("user_agent")
-            if user_agent:
-                self.headers["user-agent"] = user_agent
-        except FileNotFoundError:
-            try:
-                with open(COOKIES_FILE, "r", encoding="utf-8") as f:
-                    cookies = json.load(f)
-            except FileNotFoundError:
-                return
-
-        jar = RequestsCookieJar()
-        for key, value in cookies.items():
-            jar.set(key, value)
-        self.session.cookies.update(jar)
-        self.cookies = cookies
-
-    def fetch_data(self, url, retries=3, backoff_factor=1):
-        proxy_data = None
-        if self.proxy_obj:
-            # Parse the proxy string to extract components
-            proxy_string = self.proxy_obj.proxy_string
-            if '@' in proxy_string:
-                # Format: host:port@login:password
-                host_port_part, auth_part = proxy_string.split('@', 1)
-                if ':' in auth_part:
-                    login, password = auth_part.split(':', 1)
-                    # Reconstruct in the correct format: http://login:password@host:port
-                    formatted_proxy = f"http://{login}:{password}@{host_port_part}"
-                else:
-                    formatted_proxy = f"http://{host_port_part}"
+        # Пытаемся понять формат. 
+        # Если строка вида login:pass@ip:port
+        if '@' in proxy_string:
+            part1, part2 = proxy_string.split('@', 1)
+            # part1 = login:pass, part2 = ip:port
+            if ':' in part1 and not part1.replace(':', '').isdigit():
+                # Это точно login:pass
+                return f"http://{proxy_string}"
             else:
-                formatted_proxy = f"http://{proxy_string}"
+                # Наоборот, это ip:port@login:pass (как было в старом коде)
+                return f"http://{part2}@{part1}"
+        
+        return f"http://{proxy_string}"
+
+    def fetch_data(self, url: str) -> str | None:
+        proxy = self.get_formatted_proxy()
+        cookies = self.cookies_manager.get_cookies()
+
+        try:
+            html_code = self.http_client.get(
+                url=url,
+                proxy=proxy,
+                cookies=cookies,
+                retries=self.config.max_count_of_retry
+            )
+            self.good_request_count += 1
+            if self.proxy_obj:
+                from mobile_proxy_manager import proxy_manager
+                proxy_manager.mark_proxy_success(self.proxy_obj.proxy_string)
+            return html_code
+        except BlockError as e:
+            self.bad_request_count += 1
+            logger.warning(f"Блокировка Avito: {e}")
+            if self.proxy_obj:
+                from mobile_proxy_manager import proxy_manager
+                proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, str(e))
+            self.cookies_manager.handle_block()
             
-            proxy_data = {
-                "https": formatted_proxy,
-                "http": formatted_proxy
-            }
-            logger.debug(f"Using proxy: {formatted_proxy}")
-
-        for attempt in range(1, retries + 1):
-            if self.stop_event and self.stop_event.is_set():
-                return
-
-            try:
-                response = self.session.get(
-                    url=url,
-                    headers=self.headers,
-                    proxies=proxy_data,
-                    cookies=self.cookies,
-                    impersonate="chrome",
-                    timeout=20,
-                    verify=False,
-                )
-                logger.debug(f"Попытка {attempt}: {response.status_code}")
-
-                if response.status_code >= 500:
-                    raise requests.RequestsError(f"Ошибка сервера: {response.status_code}")
-                if response.status_code == 429:
-                    self.bad_request_count += 1
-                    self.session = requests.Session()
-                    if self._refresh_manual_session(url):
-                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
-                    self.change_ip()
-                    if attempt >= 3:
-                        self.cookies = self.get_cookies()
-                    raise requests.RequestsError(f"Слишком много запросов: {response.status_code}")
-                if response.status_code in [403, 302]:
-                    # Помечаем прокси как заблокированный
-                    if self.proxy_obj:
-                        from mobile_proxy_manager import proxy_manager
-                        proxy_manager.mark_proxy_failed(
-                            self.proxy_obj.proxy_string, 
-                            f"Заблокирован Авито: {response.status_code}"
-                        )
-                    if self._refresh_manual_session(url):
-                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
-                    self.cookies = self.get_cookies()
-                    raise requests.RequestsError(f"Заблокирован: {response.status_code}")
-                elif response.status_code != 200:
-                    logger.warning(f"Unexpected status code: {response.status_code}")
-                    raise requests.RequestsError(f"Status code: {response.status_code}")
-
-                if self._is_challenge_page(response.text):
-                    if self._refresh_manual_session(url):
-                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
-                    raise requests.RequestsError("Авито показал проверку/капчу")
-
-                self.save_cookies()
-                self.good_request_count += 1
+            # Фолбэк на ручное обновление через браузер (пока не прикрутили spfa.ru)
+            if self._refresh_manual_session(url):
+                logger.info("Сессия успешно обновлена вручную. Повторяем запрос...")
+                return self.fetch_data(url)
                 
-                # Помечаем прокси как успешный
-                if self.proxy_obj:
-                    from mobile_proxy_manager import proxy_manager
-                    proxy_manager.mark_proxy_success(self.proxy_obj.proxy_string)
-                
-                return response.text
-            except requests.RequestsError as e:
-                logger.debug(f"Попытка {attempt} закончилась неуспешно: {e}")
-                if attempt < retries:
-                    sleep_time = backoff_factor * attempt
-                    logger.debug(f"Повтор через {sleep_time} секунд...")
-                    time.sleep(sleep_time)
-                else:
-                    logger.info("Все попытки были неуспешными")
-                    return None
+            return None
+        except ProxyError as e:
+            self.bad_request_count += 1
+            logger.warning(f"Ошибка прокси: {e}")
+            if self.proxy_obj:
+                from mobile_proxy_manager import proxy_manager
+                proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, str(e))
+            return None
+        except Exception as e:
+            self.bad_request_count += 1
+            logger.error(f"Ошибка fetch_data: {e}")
+            return None
 
     @staticmethod
     def _is_challenge_page(html_code: str) -> bool:
@@ -265,7 +175,7 @@ class AvitoParse:
                 if DEBUG_MODE:
                     html_code = open("response.txt", "r", encoding="utf-8").read()
                 else:
-                    html_code = self.fetch_data(url=url, retries=self.config.max_count_of_retry)
+                    html_code = self.fetch_data(url=url)
 
                 if not html_code:
                     logger.warning(
@@ -484,7 +394,7 @@ class AvitoParse:
             return ads
         try:
             return [ad for ad in ads if
-                    self._is_recent(timestamp_ms=ad.sortTimeStamp, max_age_seconds=self.config.max_age)]
+                    ad.sortTimeStamp and self._is_recent(timestamp_ms=ad.sortTimeStamp, max_age_seconds=self.config.max_age)]
         except Exception as err:
             logger.debug(f"Ошибка при отсеивании слишком старых объявлений: {err}")
             return ads
@@ -517,7 +427,8 @@ class AvitoParse:
         for ad in ads:
             try:
                 html_code_full_page = self.fetch_data(url=f"https://www.avito.ru{ad.urlPath}")
-                ad.total_views, ad.today_views = self._extract_views(html=html_code_full_page)
+                if html_code_full_page:
+                    ad.total_views, ad.today_views = self._extract_views(html=html_code_full_page)
                 delay = random.uniform(0.1, 0.9)
                 time.sleep(delay)
             except Exception as err:
@@ -538,21 +449,30 @@ class AvitoParse:
 
         return total, today
 
-    def change_ip(self) -> bool:
-        if not self.config.proxy_change_url:
-            logger.info("Сейчас бы была смена ip, но мы без прокси")
-            return False
-        logger.info("Меняю IP")
+    def _refresh_manual_session(self, url: str) -> bool:
         try:
-            res = requests.get(url=self.config.proxy_change_url, verify=False)
-            if res.status_code == 200:
-                logger.info("IP изменен")
-                return True
+            from avito_session import refresh_avito_session
+
+            html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
+            if not html_code:
+                return False
+            self.cookies_manager.load_local_session()
+            return True
         except Exception as err:
-            logger.info(f"При смене ip возникла ошибка: {err}")
-        logger.info("Не удалось изменить IP, пробую еще раз")
-        time.sleep(random.randint(3, 10))
-        return self.change_ip()
+            logger.warning(f"Не удалось обновить Avito-сессию вручную: {err}")
+            return False
+
+    def _get_manual_rendered_html(self, url: str) -> str | None:
+        try:
+            from avito_session import refresh_avito_session
+
+            html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
+            if html_code:
+                self.cookies_manager.load_local_session()
+            return html_code
+        except Exception as err:
+            logger.warning(f"Не удалось получить отрендеренную страницу Avito: {err}")
+            return None
 
     @staticmethod
     def _extract_seller_slug(data):
