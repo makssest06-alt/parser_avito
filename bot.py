@@ -181,6 +181,53 @@ def proxy_status_command(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при получении статуса прокси: {str(e)}")
 
+@bot.message_handler(commands=['channels_status'])
+def channels_status_command(message):
+    """Показывает состояние parser channels (только для админов)."""
+    user_id = message.from_user.id
+    
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        from parser.channels.manager import ChannelManager
+
+        # Ensure channels exist for active proxies before showing status.
+        ChannelManager()
+        channels = db.get_all_parser_channels()
+        if not channels:
+            bot.reply_to(message, "📊 Parser channels отсутствуют. Добавьте прокси через /add_proxy.")
+            return
+
+        status_text = "📊 *Parser channels:*\n\n"
+        for channel in channels:
+            channel_id, proxy_string, spfa_id, status, cooldown_until, success_count, fail_count, last_error, updated_date = channel
+            proxy_masked = _mask_proxy_for_display(proxy_string)
+            status_text += (
+                f"#{channel_id} `{proxy_masked}`\n"
+                f"Статус: `{status}` | SPFA ID: `{spfa_id or '-'}`\n"
+                f"Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
+            )
+            if cooldown_until:
+                status_text += f"Cooldown до: `{cooldown_until}`\n"
+            if last_error:
+                status_text += f"Ошибка: `{last_error[:120]}`\n"
+            status_text += f"Обновлен: `{updated_date}`\n\n"
+
+        bot.reply_to(message, status_text, parse_mode='Markdown')
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при получении статуса каналов: {str(e)}")
+
+def _mask_proxy_for_display(proxy_string: str) -> str:
+    if '@' not in proxy_string:
+        return proxy_string
+    credentials, host = proxy_string.split('@', 1)
+    if ':' not in credentials:
+        return f"***@{host}"
+    login, _password = credentials.split(':', 1)
+    return f"{login}:***@{host}"
+
 def _get_or_create_parser_settings(user_id: int) -> dict:
     settings = db.get_parser_settings(user_id)
     if settings:

@@ -393,6 +393,18 @@ class Database:
             ''')
             return cursor.fetchall()
 
+    def get_all_parser_channels(self) -> List[Tuple]:
+        """Получает все parser channels для диагностики."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, proxy_string, spfa_id, status, cooldown_until,
+                       success_count, fail_count, last_error, updated_date
+                FROM parser_channels
+                ORDER BY id
+            ''')
+            return cursor.fetchall()
+
     def get_all_users(self) -> List[Tuple]:
         """Получает всех пользователей для администратора."""
         with sqlite3.connect(self.db_name) as conn:
