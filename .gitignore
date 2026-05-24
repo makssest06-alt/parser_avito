@@ -8,6 +8,7 @@ venv/
 
 # Local secrets and runtime state
 .env
+.env.local
 config.toml
 *.db
 cookies.json

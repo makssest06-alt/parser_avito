@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env.local", override=True)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
