@@ -12,6 +12,8 @@ venv/
 config.toml
 *.db
 cookies.json
+avito_session.json
+browser_profile/
 logs/
 result/
 

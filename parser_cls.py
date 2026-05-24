@@ -24,6 +24,8 @@ from tg_sender import SendAdToTg
 from models import Item, ItemsResponse
 
 DEBUG_MODE = False
+COOKIES_FILE = "cookies.json"
+SESSION_FILE = "avito_session.json"
 
 logger.add("logs/app.log", rotation="5 MB", retention="5 days", level="DEBUG")
 
@@ -42,7 +44,8 @@ class AvitoParse:
         self.stop_event = stop_event
         self.cookies = None
         self.session = requests.Session()
-        self.headers = HEADERS
+        self.headers = HEADERS.copy()
+        self.load_cookies()
         self.good_request_count = 0
         self.bad_request_count = 0
 
@@ -99,21 +102,34 @@ class AvitoParse:
                     return None
 
     def save_cookies(self) -> None:
-        """Сохраняет cookies из requests.Session в JSON-файл."""
-        with open("cookies.json", "w") as f:
-            json.dump(self.session.cookies.get_dict(), f)
+        """Сохраняет cookies и user-agent текущей сессии."""
+        cookies = {**(self.cookies or {}), **self.session.cookies.get_dict()}
+        with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(cookies, f)
+        with open(SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump({"cookies": cookies, "user_agent": self.headers.get("user-agent")}, f)
 
     def load_cookies(self) -> None:
-        """Загружает cookies из JSON-файла в requests.Session."""
+        """Загружает cookies и user-agent из ручной Avito-сессии."""
         try:
-            with open("cookies.json", "r") as f:
-                cookies = json.load(f)
-                jar = RequestsCookieJar()
-                for k, v in cookies.items():
-                    jar.set(k, v)
-                self.session.cookies.update(jar)
+            with open(SESSION_FILE, "r", encoding="utf-8") as f:
+                session_data = json.load(f)
+            cookies = session_data.get("cookies", {})
+            user_agent = session_data.get("user_agent")
+            if user_agent:
+                self.headers["user-agent"] = user_agent
         except FileNotFoundError:
-            pass
+            try:
+                with open(COOKIES_FILE, "r", encoding="utf-8") as f:
+                    cookies = json.load(f)
+            except FileNotFoundError:
+                return
+
+        jar = RequestsCookieJar()
+        for key, value in cookies.items():
+            jar.set(key, value)
+        self.session.cookies.update(jar)
+        self.cookies = cookies
 
     def fetch_data(self, url, retries=3, backoff_factor=1):
         proxy_data = None
@@ -159,6 +175,8 @@ class AvitoParse:
                 if response.status_code == 429:
                     self.bad_request_count += 1
                     self.session = requests.Session()
+                    if self._refresh_manual_session(url):
+                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
                     self.change_ip()
                     if attempt >= 3:
                         self.cookies = self.get_cookies()
@@ -171,11 +189,18 @@ class AvitoParse:
                             self.proxy_obj.proxy_string, 
                             f"Заблокирован Авито: {response.status_code}"
                         )
+                    if self._refresh_manual_session(url):
+                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
                     self.cookies = self.get_cookies()
                     raise requests.RequestsError(f"Заблокирован: {response.status_code}")
                 elif response.status_code != 200:
                     logger.warning(f"Unexpected status code: {response.status_code}")
                     raise requests.RequestsError(f"Status code: {response.status_code}")
+
+                if self._is_challenge_page(response.text):
+                    if self._refresh_manual_session(url):
+                        return self.fetch_data(url=url, retries=1, backoff_factor=backoff_factor)
+                    raise requests.RequestsError("Авито показал проверку/капчу")
 
                 self.save_cookies()
                 self.good_request_count += 1
@@ -196,6 +221,41 @@ class AvitoParse:
                     logger.info("Все попытки были неуспешными")
                     return None
 
+    @staticmethod
+    def _is_challenge_page(html_code: str) -> bool:
+        text = BeautifulSoup(html_code or "", "html.parser").get_text(" ", strip=True).lower()
+        return (
+            ("проблем" in text and "ip" in text)
+            or "captcha" in text
+            or "докажите" in text
+            or "проверка" in text and "безопас" in text
+        )
+
+    def _refresh_manual_session(self, url: str) -> bool:
+        try:
+            from avito_session import refresh_avito_session
+
+            html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
+            if not html_code:
+                return False
+            self.load_cookies()
+            return True
+        except Exception as err:
+            logger.warning(f"Не удалось обновить Avito-сессию вручную: {err}")
+            return False
+
+    def _get_manual_rendered_html(self, url: str) -> str | None:
+        try:
+            from avito_session import refresh_avito_session
+
+            html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
+            if html_code:
+                self.load_cookies()
+            return html_code
+        except Exception as err:
+            logger.warning(f"Не удалось получить отрендеренную страницу Avito: {err}")
+            return None
+
     def parse(self):
         while not (self.stop_event and self.stop_event.is_set()):
             for url in self.config.urls:
@@ -214,14 +274,18 @@ class AvitoParse:
                     continue
 
                 data_from_page = self.find_json_on_page(html_code=html_code)
+                catalog = data_from_page.get("data", {}).get("catalog") or {}
                 try:
-                    catalog = data_from_page.get("data", {}).get("catalog") or {}
                     ads_models = ItemsResponse(**catalog)
+                    ads = self._clean_null_ads(ads=ads_models.items)
                 except ValidationError as err:
-                    logger.error(f"При валидации объявлений произошла ошибка: {err}")
-                    continue
-
-                ads = self._clean_null_ads(ads=ads_models.items)
+                    ads = self._parse_ads_from_dom(html_code=html_code)
+                    if not ads:
+                        rendered_html = self._get_manual_rendered_html(url)
+                        ads = self._parse_ads_from_dom(html_code=rendered_html or "")
+                        if not ads:
+                            logger.error(f"При валидации объявлений произошла ошибка: {err}")
+                            continue
 
                 ads = self._add_seller_to_ads(ads=ads)
 
@@ -255,6 +319,7 @@ class AvitoParse:
     @staticmethod
     def find_json_on_page(html_code, data_type: str = "mime") -> dict:
         soup = BeautifulSoup(html_code, "html.parser")
+        fallback = {}
         try:
             for _script in soup.select('script'):
                 script_type = _script.get('type')
@@ -264,18 +329,68 @@ class AvitoParse:
                     parsed_data = json.loads(script_content)
 
                     if 'state' in parsed_data:
-                        return parsed_data['state']
+                        state = parsed_data['state']
+                        if state.get("data", {}).get("catalog"):
+                            return state
+                        fallback = state
 
                     elif 'data' in parsed_data:
                         logger.info("data")
-                        return parsed_data['data']
+                        if parsed_data['data'].get("catalog"):
+                            return parsed_data['data']
+                        fallback = parsed_data['data']
 
                     else:
-                        return parsed_data
+                        fallback = parsed_data
 
         except Exception as err:
             logger.error(f"Ошибка при поиске информации на странице: {err}")
-        return {}
+        return fallback
+
+    @staticmethod
+    def _parse_ads_from_dom(html_code: str) -> list[Item]:
+        soup = BeautifulSoup(html_code, "html.parser")
+        cards = soup.select('[data-marker="item"], .iva-item-root')
+        ads = []
+        for index, card in enumerate(cards):
+            title_el = card.select_one('[data-marker="item-title"], h3, [itemprop="name"]')
+            link_el = card.select_one('a[href]')
+            if not title_el or not link_el:
+                continue
+
+            title = title_el.get_text(" ", strip=True)
+            href = link_el.get("href") or ""
+            url_path = href.split("?", 1)[0].lstrip("/")
+            match = re.search(r"_(\d+)$", url_path)
+            ad_id = int(match.group(1)) if match else abs(hash(url_path or title)) % 10_000_000_000
+
+            price = 0
+            price_el = card.select_one('[data-marker="item-price"], [itemprop="price"]')
+            if price_el:
+                price_text = price_el.get("content") or price_el.get_text(" ", strip=True)
+                digits = re.sub(r"\D", "", price_text)
+                price = int(digits) if digits else 0
+
+            price_string = str(price) if price else ""
+            ads.append(Item(
+                id=ad_id,
+                title=title,
+                urlPath=url_path,
+                priceDetailed={
+                    "enabled": True,
+                    "fullString": price_string,
+                    "hasValue": bool(price),
+                    "postfix": "₽",
+                    "string": price_string,
+                    "stringWithoutDiscount": None,
+                    "title": {},
+                    "titleDative": "",
+                    "value": price,
+                    "wasLowered": False,
+                    "exponent": "",
+                },
+            ))
+        return ads
 
     def filter_ads(self, ads: list[Item]) -> list[Item]:
         """Сортирует объявления"""

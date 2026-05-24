@@ -8,8 +8,16 @@ from dto import AvitoConfig
 from parser_cls import AvitoParse
 from models import Item
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_error(error: Exception) -> str:
+    text = str(error)
+    text = re.sub(r"/bot[^/\s]+/", "/bot***/", text)
+    text = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot***", text)
+    return text
 
 class ParserService:
     def __init__(self):
@@ -181,7 +189,7 @@ class UserTgHandler:
                 self.bot.send_message(self.user_id, msg)
                 
         except Exception as e:
-            logger.error(f"Ошибка отправки сообщения пользователю {self.user_id}: {e}")
+            logger.error(f"Ошибка отправки сообщения пользователю {self.user_id}: {sanitize_error(e)}")
 
     def _convert_urls_to_strings(self, obj):
         """Рекурсивно преобразует все HttpUrl объекты и другие несериализуемые типы в строки"""
