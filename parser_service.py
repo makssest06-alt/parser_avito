@@ -3,7 +3,7 @@ import time
 import json
 import sqlite3
 from datetime import datetime
-from Database import Database
+from database import Database
 from dto import AvitoConfig
 from parser_cls import AvitoParse
 from models import Item
@@ -109,12 +109,8 @@ class ParserService:
 
     def _create_config(self, links, settings, user_id):
         """Создает конфиг для парсера"""
-        # Если прокси не установлен в настройках пользователя, используем новый прокси
-        proxy_string = settings.get('proxy_string', '')
-        if not proxy_string:
-            # Устанавливаем новый прокси с авторизацией
-            proxy_string = 'p19221.ltespace.net:19221@hsh7puzc:bmdocryd'
-            
+        # Всегда используем мобильные прокси из базы данных
+        # Настройки прокси пользователя игнорируются
         return AvitoConfig(
             urls=[link[0] for link in links],
             min_price=settings['min_price'],
@@ -127,10 +123,10 @@ class ParserService:
             ignore_reserv=settings['ignore_reserv'],
             ignore_promotion=settings['ignore_promotion'],
             parse_views=settings['parse_views'],
-            proxy_string=proxy_string,
+            proxy_string='',  # Пустая строка - прокси будет выбран из мобильных прокси
             proxy_change_url='',  # Пустая строка, так как смена IP недоступна
             tg_notifications=settings.get('tg_notifications', True),
-            one_time_start=False,  # Непрерывный парсинг
+            one_time_start=True,  # Один проход выполняется в общем цикле мониторинга
             count=1,  # Парсим только первую страницу
             pause_between_links=10,  # Пауза между запросами
             max_count_of_retry=5,
@@ -150,14 +146,7 @@ class ParserService:
             if config.tg_notifications and self.bot:
                 parser.tg_handler = UserTgHandler(user_id, self.bot)
             
-            # Запускаем парсинг в отдельном потоке
-            def run_parse():
-                parser.parse()
-            
-            parse_thread = threading.Thread(target=run_parse)
-            parse_thread.start()
-            # Не ждем завершения, чтобы мониторинг мог работать с другими пользователями
-            # Поток будет работать до stop_event
+            parser.parse()
             
         except Exception as e:
             logger.error(f"Ошибка парсинга для пользователя {user_id}: {e}")

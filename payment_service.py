@@ -1,6 +1,6 @@
 import uuid
 import logging
-from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
+from config import PAYMENT_TEST_MODE, YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -9,6 +9,11 @@ class PaymentService:
         self.shop_id = YOOKASSA_SHOP_ID
         self.secret_key = YOOKASSA_SECRET_KEY
         
+        if PAYMENT_TEST_MODE:
+            logger.info("Платежи работают в тестовом режиме")
+            self.test_mode = True
+            return
+
         # Проверяем наличие учетных данных
         if not self.shop_id or not self.secret_key:
             logger.warning("YOOKASSA_SHOP_ID или YOOKASSA_SECRET_KEY не установлены. Платежи будут работать в тестовом режиме.")

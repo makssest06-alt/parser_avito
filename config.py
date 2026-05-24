@@ -1,42 +1,25 @@
 import os
+from pathlib import Path
 
-# Читаем .env файл напрямую
-current_dir = os.path.dirname(os.path.abspath(__file__))
-env_path = os.path.join(current_dir, '.env')
+from dotenv import load_dotenv
 
-print(f"Читаем .env из: {env_path}")
 
-# Проверяем существование файла
-if not os.path.exists(env_path):
-    raise FileNotFoundError(f"Файл .env не найден по пути: {env_path}")
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
-# Читаем файл
-with open(env_path, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "").strip()
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
+DEFAULT_MOBILE_PROXY = os.getenv("DEFAULT_MOBILE_PROXY", "").strip()
+PAYMENT_TEST_MODE = os.getenv("PAYMENT_TEST_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-# Парсим переменные
-env_vars = {}
-for line in lines:
-    line = line.strip()
-    if line and not line.startswith('#') and '=' in line:
-        key, value = line.split('=', 1)
-        env_vars[key.strip()] = value.strip()
-
-# Получаем переменные
-BOT_TOKEN = env_vars.get("BOT_TOKEN")
-ADMIN_IDS = env_vars.get("ADMIN_IDS", "1993831036")
-YOOKASSA_SHOP_ID = env_vars.get("YOOKASSA_SHOP_ID", "")
-YOOKASSA_SECRET_KEY = env_vars.get("YOOKASSA_SECRET_KEY", "")
-
-# Отладочная информация
-print(f"BOT_TOKEN: {BOT_TOKEN}")
-print(f"ADMIN_IDS: {ADMIN_IDS}")
-
-# Проверка токена
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден в .env файле")
 if ":" not in BOT_TOKEN:
-    raise ValueError(f"Неверный формат токена: {BOT_TOKEN}")
+    raise ValueError("Неверный формат BOT_TOKEN")
 
-# Преобразуем ADMIN_IDS в список чисел
-ADMIN_IDS = list(map(int, ADMIN_IDS.split(',')))
+try:
+    ADMIN_IDS = [int(value.strip()) for value in ADMIN_IDS_RAW.split(",") if value.strip()]
+except ValueError as exc:
+    raise ValueError("ADMIN_IDS должен быть списком чисел через запятую") from exc

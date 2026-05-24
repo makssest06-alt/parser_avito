@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, ADMIN_IDS
-from Database import Database
+from database import Database
 from payment_service import payment_service
 from dto import AvitoConfig
 from parser_cls import AvitoParse
@@ -123,7 +123,7 @@ def add_proxy_command(message):
                     "❌ Использование: /add_proxy [прокси]\n\n"
                     "Формат: host:port@login:password\n\n"
                     "Пример:\n"
-                    "/add_proxy p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
+                    "/add_proxy proxy.example.com:12345@login:password")
         return
     
     proxy_string = command_parts[1].strip()
@@ -135,7 +135,7 @@ def add_proxy_command(message):
                     "Правильный формат:\n"
                     "host:port@login:password\n\n"
                     "Пример:\n"
-                    "p19221.ltespace.net:19221@hsh7puzc:bmdocryd")
+                    "proxy.example.com:12345@login:password")
         return
     
     try:
@@ -180,6 +180,70 @@ def proxy_status_command(message):
         
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при получении статуса прокси: {str(e)}")
+
+def _get_or_create_parser_settings(user_id: int) -> dict:
+    settings = db.get_parser_settings(user_id)
+    if settings:
+        return settings
+
+    settings = {
+        'min_price': 0,
+        'max_price': 999999999,
+        'keys_word_white_list': [],
+        'keys_word_black_list': [],
+        'seller_black_list': [],
+        'geo': '',
+        'max_age': 86400,
+        'ignore_reserv': True,
+        'ignore_promotion': False,
+        'parse_views': False,
+        'tg_notifications': True,
+    }
+    db.update_parser_settings(user_id, settings)
+    return settings
+
+def _update_parser_setting(message, key: str, value):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS and not db.is_user_active(user_id):
+        bot.reply_to(message, "Для настройки парсера нужна активная подписка!")
+        return
+
+    settings = _get_or_create_parser_settings(user_id)
+    settings[key] = value
+    db.update_parser_settings(user_id, settings)
+    bot.reply_to(message, "Настройка сохранена.")
+
+def _get_command_argument(message, command: str) -> str:
+    return message.text.replace(command, "", 1).strip()
+
+@bot.message_handler(commands=['set_min_price'])
+def set_min_price_command(message):
+    try:
+        value = int(_get_command_argument(message, '/set_min_price'))
+        _update_parser_setting(message, 'min_price', value)
+    except ValueError:
+        bot.reply_to(message, "Использование: /set_min_price 1000")
+
+@bot.message_handler(commands=['set_max_price'])
+def set_max_price_command(message):
+    try:
+        value = int(_get_command_argument(message, '/set_max_price'))
+        _update_parser_setting(message, 'max_price', value)
+    except ValueError:
+        bot.reply_to(message, "Использование: /set_max_price 50000")
+
+@bot.message_handler(commands=['set_geo'])
+def set_geo_command(message):
+    value = _get_command_argument(message, '/set_geo')
+    _update_parser_setting(message, 'geo', value)
+
+@bot.message_handler(commands=['set_max_age'])
+def set_max_age_command(message):
+    try:
+        value = int(_get_command_argument(message, '/set_max_age'))
+        _update_parser_setting(message, 'max_age', value)
+    except ValueError:
+        bot.reply_to(message, "Использование: /set_max_age 86400")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -469,7 +533,7 @@ def check_payment_status(user_id: int, payment_id: str, chat_id: int):
                     
                     # Обновляем клавиатуру пользователя
                     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                    markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Моя подписка')
                     
                     bot.send_message(
                         chat_id,
@@ -540,7 +604,7 @@ def check_pending_payments():
                         
                         # Отправляем сообщение пользователю
                         markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-                        markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Настройки прокси', 'Моя подписка')
+                        markup.add('Добавить ссылку', 'Мои ссылки', 'Тест парсера', 'Настройки парсера', 'Моя подписка')
                         
                         try:
                             bot.send_message(
@@ -730,159 +794,6 @@ def start_test_parsing(message):
     """Запускает тестовый парсинг для администратора"""
     user_id = message.from_user.id
     
-    # Создаем тестовую ссылку для проверки
-    test_url = "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAUSSyA3OqzmwwQ2I_Dc?cd=1"
-    
-    # Создаем тестовые настройки парсера (убираем фильтр по гео для теста)
-    test_config = {
-        'min_price': 1000,
-        'max_price': 50000,
-        'keys_word_white_list': ['iphone'],
-        'keys_word_black_list': [],
-        'seller_black_list': [],
-        'geo': '',  # Убираем фильтр по городу для теста
-        'max_age': 86400,
-        'ignore_reserv': True,
-        'ignore_promotion': False,
-        'parse_views': False,
-        'tg_notifications': True
-    }
-    
-    # Сохраняем тестовые настройки
-    db.update_parser_settings(user_id, test_config)
-    
-    # Добавляем тестовую ссылку
-    db.add_user_link(user_id, test_url)
-    
-    # Создаем конфиг для парсера
-    config = AvitoConfig(
-        urls=[test_url],
-        min_price=test_config['min_price'],
-        max_price=test_config['max_price'],
-        keys_word_white_list=test_config['keys_word_white_list'],
-        keys_word_black_list=test_config['keys_word_black_list'],
-        seller_black_list=test_config['seller_black_list'],
-        geo=test_config['geo'],
-        max_age=test_config['max_age'],
-        ignore_reserv=test_config['ignore_reserv'],
-        ignore_promotion=test_config['ignore_promotion'],
-        parse_views=test_config['parse_views'],
-        one_time_start=False,  # Изменено на False, чтобы отправлялись уведомления
-        count=1,
-        pause_between_links=2,
-        max_count_of_retry=3,
-        save_xlsx=False
-    )
-    
-    # Запускаем парсинг в отдельном потоке
-    threading.Thread(target=run_test_parser, args=(user_id, config, message.chat.id), daemon=True).start()
-    
-    bot.send_message(
-        message.chat.id,
-        "🔍 *Запускаю тестовый парсинг...*\n\n"
-        "Тестовые параметры:\n"
-        f"• Ссылка: {test_url}\n"
-        f"• Цена: {test_config['min_price']} - {test_config['max_price']} руб. (все цены)\n"
-        f"• Ключевые слова: {'любые' if not test_config['keys_word_white_list'] else ', '.join(test_config['keys_word_white_list'])}\n"
-        f"• Город: {'Любой (фильтр отключен)' if not test_config['geo'] else test_config['geo']}\n"
-        f"• Возраст объявлений: {'любой' if test_config['max_age'] == 0 else test_config['max_age']} сек.\n\n"
-        "Результаты придут в этом чате в течение 1-2 минут.",
-        parse_mode='Markdown'
-    )
-
-def run_test_parser(user_id, config, chat_id):
-    """Запускает парсер в отдельном потоке"""
-    try:
-        # Создаем обработчик для отправки уведомлений администратору
-        tg_handler = UserTgHandler(user_id, bot)
-        
-        # Создаем список для отслеживания найденных объявлений
-        found_ads = []
-        original_send_to_tg = tg_handler.send_to_tg
-        
-        def track_send_to_tg(ad=None, msg=None):
-            if ad:
-                found_ads.append(ad)
-                logger.info(f"Найдено объявление: {ad.title} - {ad.priceDetailed.value} руб.")
-            if msg:
-                logger.info(f"Получено сообщение: {msg}")
-            original_send_to_tg(ad=ad, msg=msg)
-        
-        tg_handler.send_to_tg = track_send_to_tg
-        
-        # Создаем событие остановки
-        stop_event = threading.Event()
-        
-        # Запускаем парсер
-        parser = AvitoParse(config, stop_event=stop_event)
-        parser.tg_handler = tg_handler
-        
-        # Запускаем парсинг в отдельном потоке
-        def parse_with_stop():
-            parser.parse()
-            # После завершения парсинга устанавливаем событие остановки
-            stop_event.set()
-        
-        parse_thread = threading.Thread(target=parse_with_stop)
-        parse_thread.start()
-        
-        # Ждем завершения парсинга или таймаут
-        parse_thread.join(timeout=120)  # 2 минуты таймаут
-        
-        # Если поток еще жив, останавливаем
-        if parse_thread.is_alive():
-            stop_event.set()
-            parse_thread.join(timeout=10)
-        
-        # Формируем сообщение о результатах
-        if found_ads:
-            result_message = (
-                f"✅ *Тестовый парсинг завершен успешно!*\n\n"
-                f"Найдено и отправлено *{len(found_ads)}* новых объявлений.\n"
-                f"Парсер работает корректно.\n\n"
-                f"Примеры найденных объявлений:\n"
-            )
-            # Добавляем информацию о первых 3 объявлениях
-            for i, ad in enumerate(found_ads[:3]):
-                result_message += f"\n{i+1}. {ad.title} - {ad.priceDetailed.value} руб."
-        else:
-            result_message = (
-                "⚠️ *Тестовый парсинг завершен, но объявления не найдены.*\n\n"
-                "Возможные причины:\n"
-                "• Нет новых объявлений по заданным критериям\n"
-                "• Все объявления уже были просмотрены ранее\n"
-                "• Слишком строгие фильтры поиска\n\n"
-                "Попробуйте изменить параметры поиска."
-            )
-        
-        result_message += "\n\nТестовые данные были автоматически удалены."
-        
-        # Отправляем сообщение о завершении
-        bot.send_message(
-            chat_id,
-            result_message,
-            parse_mode='Markdown'
-        )
-        
-        # Удаляем тестовую ссылку
-        with sqlite3.connect(db.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM user_links WHERE user_id = ? AND avito_link = ?', 
-                          (user_id, config.urls[0]))
-            conn.commit()
-            
-    except Exception as e:
-        logger.error(f"Ошибка при тестовом парсинге: {e}")
-        bot.send_message(
-            chat_id,
-            f"❌ *Ошибка при тестовом парсинге:*\n\n{str(e)}",
-            parse_mode='Markdown'
-        )
-
-def start_test_parsing(message):
-    """Запускает тестовый парсинг для администратора"""
-    user_id = message.from_user.id
-    
     # Получаем текущие настройки (включая прокси)
     current_settings = db.get_parser_settings(user_id)
     if not current_settings:
@@ -929,7 +840,7 @@ def start_test_parsing(message):
         parse_views=test_config['parse_views'],
         proxy_string=test_config['proxy_string'],
         proxy_change_url=test_config['proxy_change_url'],
-        one_time_start=False,  # Изменено на False для отправки уведомлений
+        one_time_start=True,
         count=1,
         pause_between_links=2,
         max_count_of_retry=3,
@@ -1006,7 +917,7 @@ def start_user_test_parsing(message):
         parse_views=test_config['parse_views'],
         proxy_string=test_config['proxy_string'],
         proxy_change_url=test_config['proxy_change_url'],
-        one_time_start=False,
+        one_time_start=True,
         count=1,
         pause_between_links=2,
         max_count_of_retry=3,
@@ -1201,7 +1112,7 @@ def start_simple_user_test_parsing(message):
         parse_views=test_config['parse_views'],
         proxy_string=test_config['proxy_string'],
         proxy_change_url=test_config['proxy_change_url'],
-        one_time_start=False,
+        one_time_start=True,
         count=1,
         pause_between_links=2,
         max_count_of_retry=3,
@@ -1314,12 +1225,11 @@ def run_simple_user_test_parser(user_id, config, chat_id):
             parse_mode='Markdown'
         )
 
-# Запускаем фоновую проверку
-payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
-payment_checker_thread.start()
-
 # Запуск бота
 if __name__ == '__main__':
+    payment_checker_thread = threading.Thread(target=check_pending_payments, daemon=True)
+    payment_checker_thread.start()
+
     # Устанавливаем бот в сервис парсера
     parser_service.set_bot(bot)
     

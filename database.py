@@ -1,294 +1,21 @@
-import sqlite3
-from datetime import datetime, timedelta
-from typing import Optional
-
-class Database:
-    def __init__(self, db_name="users.db"):
-        self.db_name = db_name
-        self._create_tables()
-
-    def _create_tables(self):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            
-            # Таблица пользователей
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    last_name TEXT,
-                    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            ''')
-            
-            # Таблица подписок
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS subscriptions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    subscription_type TEXT,
-                    start_date TIMESTAMP,
-                    end_date TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-            
-            # Таблица платежей
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    amount REAL,
-                    currency TEXT DEFAULT 'RUB',
-                    payment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    payment_system TEXT,
-                    payment_id TEXT UNIQUE,
-                    status TEXT,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-            
-            # Таблица ссылок пользователей
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS user_links (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    avito_link TEXT,
-                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-            
-            # Таблица настроек парсера для пользователей
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS parser_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    min_price INTEGER DEFAULT 0,
-                    max_price INTEGER DEFAULT 999999999,
-                    keys_word_white_list TEXT,
-                    keys_word_black_list TEXT,
-                    seller_black_list TEXT,
-                    geo TEXT,
-                    max_age INTEGER DEFAULT 86400,
-                    ignore_reserv BOOLEAN DEFAULT TRUE,
-                    ignore_promotion BOOLEAN DEFAULT FALSE,
-                    parse_views BOOLEAN DEFAULT FALSE,
-                    tg_notifications BOOLEAN DEFAULT TRUE,
-                    proxy_string TEXT DEFAULT '',
-                    proxy_change_url TEXT DEFAULT '',
-                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-            
-            # Таблица найденных объявлений
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS found_ads (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    ad_id INTEGER,
-                    ad_data TEXT,
-                    found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
-                )
-            ''')
-            
-            conn.commit()
-            
-            # Проверяем существование колонок proxy_string и proxy_change_url
-            cursor.execute("PRAGMA table_info(parser_settings)")
-            columns = [column[1] for column in cursor.fetchall()]
-            
-            # Добавляем отсутствующие колонки
-            if 'proxy_string' not in columns:
-                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_string TEXT DEFAULT ''")
-            if 'proxy_change_url' not in columns:
-                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_change_url TEXT DEFAULT ''")
-            
-            conn.commit()
-
-    def add_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO users (user_id, username, first_name, last_name)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, username, first_name, last_name))
-            conn.commit()
-
-    def get_user_subscription(self, user_id: int) -> Optional[dict]:
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT subscription_type, start_date, end_date, is_active
-                FROM subscriptions 
-                WHERE user_id = ? 
-                ORDER BY end_date DESC LIMIT 1
-            ''', (user_id,))
-            
-            result = cursor.fetchone()
-            if result:
-                subscription_type, start_date, end_date, is_active = result
-                # Проверяем, активна ли подписка
-                is_currently_active = is_active and datetime.now() < datetime.fromisoformat(end_date)
-                return {
-                    'type': subscription_type,
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'is_active': is_currently_active
-                }
-            return None
-
-    def add_subscription(self, user_id: int, subscription_type: str, duration_days: int):
-        start_date = datetime.now()
-        end_date = start_date + timedelta(days=duration_days)
-        
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            # Деактивируем старые подписки
-            cursor.execute('''
-                UPDATE subscriptions SET is_active = FALSE WHERE user_id = ?
-            ''', (user_id,))
-            
-            # Добавляем новую подписку
-            cursor.execute('''
-                INSERT INTO subscriptions (user_id, subscription_type, start_date, end_date)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, subscription_type, start_date, end_date))
-            conn.commit()
-
-    def add_payment(self, user_id: int, amount: float, payment_system: str, payment_id: str, status: str = 'pending'):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO payments (user_id, amount, payment_system, payment_id, status)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (user_id, amount, payment_system, payment_id, status))
-            conn.commit()
-
-    def add_user_link(self, user_id: int, avito_link: str):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO user_links (user_id, avito_link)
-                VALUES (?, ?)
-            ''', (user_id, avito_link))
-            conn.commit()
-
-    def get_user_links(self, user_id: int) -> list:
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT avito_link, created_date 
-                FROM user_links 
-                WHERE user_id = ? AND is_active = TRUE
-                ORDER BY created_date DESC
-            ''', (user_id,))
-            return cursor.fetchall()
-
-    def is_user_active(self, user_id: int) -> bool:
-        subscription = self.get_user_subscription(user_id)
-        return subscription and subscription['is_active']
-
-    def get_parser_settings(self, user_id: int) -> Optional[dict]:
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT min_price, max_price, keys_word_white_list, keys_word_black_list, 
-                       seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, 
-                       parse_views, tg_notifications, proxy_string, proxy_change_url
-                FROM parser_settings 
-                WHERE user_id = ?
-            ''', (user_id,))
-            
-            result = cursor.fetchone()
-            if result:
-                return {
-                    'min_price': result[0],
-                    'max_price': result[1],
-                    'keys_word_white_list': result[2].split('\n') if result[2] else [],
-                    'keys_word_black_list': result[3].split('\n') if result[3] else [],
-                    'seller_black_list': result[4].split('\n') if result[4] else [],
-                    'geo': result[5],
-                    'max_age': result[6],
-                    'ignore_reserv': bool(result[7]),
-                    'ignore_promotion': bool(result[8]),
-                    'parse_views': bool(result[9]),
-                    'tg_notifications': bool(result[10]),
-                    'proxy_string': result[11],
-                    'proxy_change_url': result[12]
-                }
-            return None
-
-    def update_parser_settings(self, user_id: int, settings: dict):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            # Удаляем старые настройки
-            cursor.execute('DELETE FROM parser_settings WHERE user_id = ?', (user_id,))
-            
-            # Добавляем новые настройки
-            cursor.execute('''
-                INSERT INTO parser_settings 
-                (user_id, min_price, max_price, keys_word_white_list, keys_word_black_list, 
-                 seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, parse_views, tg_notifications,
-                 proxy_string, proxy_change_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                user_id,
-                settings.get('min_price', 0),
-                settings.get('max_price', 999999999),
-                '\n'.join(settings.get('keys_word_white_list', [])),
-                '\n'.join(settings.get('keys_word_black_list', [])),
-                '\n'.join(settings.get('seller_black_list', [])),
-                settings.get('geo', ''),
-                settings.get('max_age', 86400),
-                settings.get('ignore_reserv', True),
-                settings.get('ignore_promotion', False),
-                settings.get('parse_views', False),
-                settings.get('tg_notifications', True),
-                settings.get('proxy_string', ''),
-                settings.get('proxy_change_url', '')
-            ))
-            conn.commit()
-
-    def add_found_ad(self, user_id: int, ad_id: int, ad_data: str):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR IGNORE INTO found_ads (user_id, ad_id, ad_data)
-                VALUES (?, ?, ?)
-            ''', (user_id, ad_id, ad_data))
-            conn.commit()
-
-    def is_ad_found(self, user_id: int, ad_id: int) -> bool:
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT 1 FROM found_ads WHERE user_id = ? AND ad_id = ?
-            ''', (user_id, ad_id))
-            return cursor.fetchone() is not None
-import sqlite3
-from datetime import datetime, timedelta
-from typing import Optional
 import logging
+import sqlite3
+from datetime import datetime, timedelta
+from typing import List, Optional, Tuple
+
 
 logger = logging.getLogger(__name__)
 
+
 class Database:
-    def __init__(self, db_name="users.db"):
+    def __init__(self, db_name: str = "users.db"):
         self.db_name = db_name
         self._create_tables()
 
     def _create_tables(self):
+        """Создает все необходимые таблицы в базе данных."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            
-            # Таблица пользователей
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -299,8 +26,6 @@ class Database:
                     is_active BOOLEAN DEFAULT TRUE
                 )
             ''')
-            
-            # Таблица подписок
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -312,8 +37,6 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
             ''')
-            
-            # Таблица платежей
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS payments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -327,8 +50,6 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
             ''')
-            
-            # Таблица ссылок пользователей
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_links (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -339,12 +60,10 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
             ''')
-            
-            # Таблица настроек парсера для пользователей
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS parser_settings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
+                    user_id INTEGER UNIQUE,
                     min_price INTEGER DEFAULT 0,
                     max_price INTEGER DEFAULT 999999999,
                     keys_word_white_list TEXT,
@@ -362,8 +81,6 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
             ''')
-            
-            # Таблица найденных объявлений
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS found_ads (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -371,33 +88,33 @@ class Database:
                     ad_id INTEGER,
                     ad_data TEXT,
                     found_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                    FOREIGN KEY (user_id) REFERENCES users (user_id),
+                    UNIQUE(user_id, ad_id)
                 )
             ''')
-            
-            # Таблица просмотренных объявлений (из db_service.py)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS viewed (
                     id INTEGER,
-                    price INTEGER
+                    price INTEGER,
+                    PRIMARY KEY (id, price)
                 )
             ''')
-            
-            conn.commit()
-            
-            # Проверяем существование колонок proxy_string и proxy_change_url
-            cursor.execute("PRAGMA table_info(parser_settings)")
-            columns = [column[1] for column in cursor.fetchall()]
-            
-            # Добавляем отсутствующие колонки
-            if 'proxy_string' not in columns:
-                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_string TEXT DEFAULT ''")
-            if 'proxy_change_url' not in columns:
-                cursor.execute("ALTER TABLE parser_settings ADD COLUMN proxy_change_url TEXT DEFAULT ''")
-            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS mobile_proxies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proxy_string TEXT UNIQUE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    last_used TIMESTAMP,
+                    success_count INTEGER DEFAULT 0,
+                    fail_count INTEGER DEFAULT 0,
+                    last_fail_reason TEXT,
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
 
     def add_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None):
+        """Добавляет или обновляет пользователя."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -407,56 +124,59 @@ class Database:
             conn.commit()
 
     def get_user_subscription(self, user_id: int) -> Optional[dict]:
+        """Получает последнюю подписку пользователя и вычисляет ее текущий статус."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT subscription_type, start_date, end_date, is_active
-                FROM subscriptions 
-                WHERE user_id = ? 
+                FROM subscriptions
+                WHERE user_id = ?
                 ORDER BY end_date DESC LIMIT 1
             ''', (user_id,))
-            
             result = cursor.fetchone()
-            if result:
-                subscription_type, start_date, end_date, is_active = result
-                # Проверяем, активна ли подписка
-                is_currently_active = is_active and datetime.now() < datetime.fromisoformat(end_date)
-                return {
-                    'type': subscription_type,
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'is_active': is_currently_active
-                }
+
+        if not result:
             return None
 
+        subscription_type, start_date, end_date, is_active = result
+        if isinstance(end_date, str):
+            end_datetime = datetime.fromisoformat(end_date)
+        else:
+            end_datetime = datetime.fromtimestamp(end_date)
+
+        return {
+            'type': subscription_type,
+            'start_date': start_date,
+            'end_date': end_date,
+            'is_active': bool(is_active) and datetime.now() < end_datetime,
+        }
+
     def add_subscription(self, user_id: int, subscription_type: str, duration_days: int):
+        """Добавляет новую подписку и деактивирует предыдущие."""
         start_date = datetime.now()
         end_date = start_date + timedelta(days=duration_days)
-        
+
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            # Деактивируем старые подписки
+            cursor.execute('UPDATE subscriptions SET is_active = FALSE WHERE user_id = ?', (user_id,))
             cursor.execute('''
-                UPDATE subscriptions SET is_active = FALSE WHERE user_id = ?
-            ''', (user_id,))
-            
-            # Добавляем новую подписку
-            cursor.execute('''
-                INSERT INTO subscriptions (user_id, subscription_type, start_date, end_date)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, subscription_type, start_date, end_date))
+                INSERT INTO subscriptions (user_id, subscription_type, start_date, end_date, is_active)
+                VALUES (?, ?, ?, ?, TRUE)
+            ''', (user_id, subscription_type, start_date.isoformat(), end_date.isoformat()))
             conn.commit()
 
     def add_payment(self, user_id: int, amount: float, payment_system: str, payment_id: str, status: str = 'pending'):
+        """Добавляет или обновляет запись о платеже."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO payments (user_id, amount, payment_system, payment_id, status)
+                INSERT OR REPLACE INTO payments (user_id, amount, payment_system, payment_id, status)
                 VALUES (?, ?, ?, ?, ?)
             ''', (user_id, amount, payment_system, payment_id, status))
             conn.commit()
 
     def add_user_link(self, user_id: int, avito_link: str):
+        """Добавляет ссылку для мониторинга."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -465,64 +185,65 @@ class Database:
             ''', (user_id, avito_link))
             conn.commit()
 
-    def get_user_links(self, user_id: int) -> list:
+    def get_user_links(self, user_id: int) -> List[Tuple[str, str]]:
+        """Получает все активные ссылки пользователя."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT avito_link, created_date 
-                FROM user_links 
+                SELECT avito_link, created_date
+                FROM user_links
                 WHERE user_id = ? AND is_active = TRUE
                 ORDER BY created_date DESC
             ''', (user_id,))
             return cursor.fetchall()
 
     def is_user_active(self, user_id: int) -> bool:
+        """Проверяет наличие активной подписки."""
         subscription = self.get_user_subscription(user_id)
-        return subscription and subscription['is_active']
+        return bool(subscription and subscription['is_active'])
 
     def get_parser_settings(self, user_id: int) -> Optional[dict]:
+        """Получает настройки парсера пользователя."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT min_price, max_price, keys_word_white_list, keys_word_black_list, 
-                       seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, 
-                       parse_views, tg_notifications, proxy_string, proxy_change_url
-                FROM parser_settings 
+                SELECT min_price, max_price, keys_word_white_list, keys_word_black_list,
+                       seller_black_list, geo, max_age, ignore_reserv, ignore_promotion,
+                       parse_views, tg_notifications
+                FROM parser_settings
                 WHERE user_id = ?
             ''', (user_id,))
-            
             result = cursor.fetchone()
-            if result:
-                return {
-                    'min_price': result[0],
-                    'max_price': result[1],
-                    'keys_word_white_list': result[2].split('\n') if result[2] else [],
-                    'keys_word_black_list': result[3].split('\n') if result[3] else [],
-                    'seller_black_list': result[4].split('\n') if result[4] else [],
-                    'geo': result[5],
-                    'max_age': result[6],
-                    'ignore_reserv': bool(result[7]),
-                    'ignore_promotion': bool(result[8]),
-                    'parse_views': bool(result[9]),
-                    'tg_notifications': bool(result[10]),
-                    'proxy_string': result[11],
-                    'proxy_change_url': result[12]
-                }
+
+        if not result:
             return None
 
+        return {
+            'min_price': result[0],
+            'max_price': result[1],
+            'keys_word_white_list': result[2].split('\n') if result[2] else [],
+            'keys_word_black_list': result[3].split('\n') if result[3] else [],
+            'seller_black_list': result[4].split('\n') if result[4] else [],
+            'geo': result[5],
+            'max_age': result[6],
+            'ignore_reserv': bool(result[7]),
+            'ignore_promotion': bool(result[8]),
+            'parse_views': bool(result[9]),
+            'tg_notifications': bool(result[10]),
+            'proxy_string': '',
+            'proxy_change_url': '',
+        }
+
     def update_parser_settings(self, user_id: int, settings: dict):
+        """Обновляет настройки парсера пользователя."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            # Удаляем старые настройки
             cursor.execute('DELETE FROM parser_settings WHERE user_id = ?', (user_id,))
-            
-            # Добавляем новые настройки
             cursor.execute('''
-                INSERT INTO parser_settings 
-                (user_id, min_price, max_price, keys_word_white_list, keys_word_black_list, 
-                 seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, parse_views, tg_notifications,
-                 proxy_string, proxy_change_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO parser_settings
+                (user_id, min_price, max_price, keys_word_white_list, keys_word_black_list,
+                 seller_black_list, geo, max_age, ignore_reserv, ignore_promotion, parse_views, tg_notifications)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id,
                 settings.get('min_price', 0),
@@ -536,12 +257,11 @@ class Database:
                 settings.get('ignore_promotion', False),
                 settings.get('parse_views', False),
                 settings.get('tg_notifications', True),
-                settings.get('proxy_string', ''),
-                settings.get('proxy_change_url', '')
             ))
             conn.commit()
 
     def add_found_ad(self, user_id: int, ad_id: int, ad_data: str):
+        """Добавляет найденное объявление."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -551,45 +271,117 @@ class Database:
             conn.commit()
 
     def is_ad_found(self, user_id: int, ad_id: int) -> bool:
+        """Проверяет, было ли объявление уже найдено."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT 1 FROM found_ads WHERE user_id = ? AND ad_id = ?
-            ''', (user_id, ad_id))
+            cursor.execute('SELECT 1 FROM found_ads WHERE user_id = ? AND ad_id = ?', (user_id, ad_id))
             return cursor.fetchone() is not None
 
-    # Методы из db_service.py для работы с таблицей viewed
     def add_record(self, ad):
-        """Добавляет новую запись в таблицу viewed."""
+        """Добавляет запись в таблицу просмотренных объявлений."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO viewed (id, price) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO viewed (id, price) VALUES (?, ?)",
                 (ad.id, ad.priceDetailed.value),
             )
             conn.commit()
 
     def add_record_from_page(self, ads: list):
-        """Добавляет несколько записей в таблицу viewed."""
+        """Добавляет несколько просмотренных объявлений."""
         records = [(ad.id, ad.priceDetailed.value) for ad in ads]
+        if not records:
+            return
 
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.executemany(
-                """
-                INSERT OR REPLACE INTO viewed (id, price)
-                VALUES (?, ?)
-                """,
-                records,
-            )
+            cursor.executemany("INSERT OR IGNORE INTO viewed (id, price) VALUES (?, ?)", records)
             conn.commit()
 
-    def record_exists(self, record_id, price):
-        """Проверяет, существует ли запись с заданными id и price."""
+    def record_exists(self, record_id: int, price: int) -> bool:
+        """Проверяет существование просмотренного объявления."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM viewed WHERE id = ? AND price = ?",
-                (record_id, price),
-            )
+            cursor.execute("SELECT 1 FROM viewed WHERE id = ? AND price = ?", (record_id, price))
             return cursor.fetchone() is not None
+
+    def add_mobile_proxy(self, proxy_string: str):
+        """Добавляет мобильный прокси."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT OR IGNORE INTO mobile_proxies (proxy_string) VALUES (?)', (proxy_string,))
+            conn.commit()
+
+    def get_random_active_proxy(self) -> Optional[str]:
+        """Получает случайный активный прокси."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT proxy_string FROM mobile_proxies
+                WHERE is_active = TRUE
+                ORDER BY RANDOM()
+                LIMIT 1
+            ''')
+            result = cursor.fetchone()
+            return result[0] if result else None
+
+    def update_proxy_stats(self, proxy_string: str, success: bool, fail_reason: str = None):
+        """Обновляет статистику использования прокси."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            if success:
+                cursor.execute('''
+                    UPDATE mobile_proxies
+                    SET success_count = success_count + 1,
+                        last_used = CURRENT_TIMESTAMP
+                    WHERE proxy_string = ?
+                ''', (proxy_string,))
+            else:
+                cursor.execute('''
+                    UPDATE mobile_proxies
+                    SET fail_count = fail_count + 1,
+                        last_fail_reason = ?,
+                        last_used = CURRENT_TIMESTAMP
+                    WHERE proxy_string = ?
+                ''', (fail_reason, proxy_string))
+            conn.commit()
+
+    def disable_proxy(self, proxy_string: str, reason: str):
+        """Отключает прокси."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE mobile_proxies
+                SET is_active = FALSE,
+                    last_fail_reason = ?
+                WHERE proxy_string = ?
+            ''', (reason, proxy_string))
+            conn.commit()
+
+    def get_all_proxies(self) -> List[Tuple]:
+        """Получает все прокси."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT proxy_string, is_active, success_count, fail_count, last_fail_reason
+                FROM mobile_proxies
+                ORDER BY created_date
+            ''')
+            return cursor.fetchall()
+
+    def get_all_users(self) -> List[Tuple]:
+        """Получает всех пользователей для администратора."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT u.user_id, u.username, u.first_name, u.last_name,
+                       u.registration_date, u.is_active,
+                       s.subscription_type, s.end_date,
+                       COUNT(ul.avito_link) as links_count
+                FROM users u
+                LEFT JOIN subscriptions s ON u.user_id = s.user_id AND s.is_active = TRUE
+                LEFT JOIN user_links ul ON u.user_id = ul.user_id AND ul.is_active = TRUE
+                GROUP BY u.user_id
+                ORDER BY u.registration_date DESC
+            ''')
+            return cursor.fetchall()

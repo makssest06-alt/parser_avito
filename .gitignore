@@ -1,0 +1,20 @@
+.aider*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets and runtime state
+.env
+config.toml
+*.db
+cookies.json
+logs/
+result/
+
+# Local installers and OS/editor files
+*.msi
+.DS_Store
+Thumbs.db

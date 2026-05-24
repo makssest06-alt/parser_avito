@@ -15,7 +15,7 @@ from requests.cookies import RequestsCookieJar
 from typing import List
 
 from common_data import HEADERS
-from Database import Database
+from database import Database
 from dto import Proxy, AvitoConfig
 from get_cookies import get_cookies
 from hide_private_data import log_config
@@ -247,10 +247,6 @@ class AvitoParse:
                 break
 
         logger.info(f"Хорошие запросы: {self.good_request_count}шт, плохие: {self.bad_request_count}шт")
-
-        if self.config.one_time_start and self.tg_handler:
-            self.tg_handler.send_to_tg(msg="Парсинг Авито завершён. Все ссылки обработаны")
-            self.stop_event = True
 
     @staticmethod
     def _clean_null_ads(ads: list[Item]) -> list[Item]:
