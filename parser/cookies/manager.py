@@ -29,10 +29,13 @@ class CookiesManager:
                 
             raw_cookies = data.get("cookies", [])
             
-            # Конвертируем список словарей (формат Playwright/Selenium) в простой словарь для requests
+            # Конвертируем список словарей (формат Playwright/Selenium) или читаем как словарь
             formatted_cookies = {}
-            for c in raw_cookies:
-                formatted_cookies[c['name']] = c['value']
+            if isinstance(raw_cookies, dict):
+                formatted_cookies = raw_cookies
+            elif isinstance(raw_cookies, list):
+                for c in raw_cookies:
+                    formatted_cookies[c['name']] = c['value']
                 
             self.current_cookies = formatted_cookies
             self.user_agent = data.get("user_agent")

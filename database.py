@@ -385,3 +385,24 @@ class Database:
                 ORDER BY u.registration_date DESC
             ''')
             return cursor.fetchall()
+
+    def get_all_active_links_with_users(self) -> dict:
+        """Возвращает словарь {url: [user_id_1, user_id_2]}"""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT ul.avito_link, ul.user_id 
+                FROM user_links ul
+                JOIN subscriptions s ON ul.user_id = s.user_id
+                WHERE ul.is_active = TRUE 
+                AND s.is_active = TRUE 
+                AND s.end_date > ?
+            ''', (datetime.now(),))
+            
+            result = {}
+            for link, user_id in cursor.fetchall():
+                if link not in result:
+                    result[link] = []
+                if user_id not in result[link]:
+                    result[link].append(user_id)
+            return result

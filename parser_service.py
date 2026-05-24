@@ -52,50 +52,55 @@ class ParserService:
         self.stop_monitoring()
 
     def _monitoring_loop(self):
-        """Основной цикл мониторинга"""
+        """Основной цикл мониторинга (Queue & Deduplication)"""
         while self.is_running and not self.stop_event.is_set():
             try:
-                # Получаем всех активных пользователей
-                active_users = self._get_active_users()
+                links_with_users = self.db.get_all_active_links_with_users()
                 
-                for user_id in active_users:
+                if not links_with_users:
+                    time.sleep(60)
+                    continue
+                    
+                # Создаем единый парсер для скачивания (с любыми дефолтными настройками)
+                generic_config = self._create_config([], self._get_default_settings(), 0)
+                parser = AvitoParse(generic_config, stop_event=self.stop_event)
+                
+                for url, user_ids in links_with_users.items():
                     if self.stop_event.is_set():
                         break
+                        
+                    logger.info(f"Парсинг ссылки для {len(user_ids)} пользователей: {url}")
+                    ads = parser.get_ads_from_url(url)
                     
-                    # Получаем ссылки пользователя
-                    links = self.db.get_user_links(user_id)
-                    if not links:
+                    if not ads:
+                        time.sleep(10)
                         continue
-                    
-                    # Получаем настройки парсера
-                    settings = self.db.get_parser_settings(user_id)
-                    if not settings:
-                        settings = self._get_default_settings()
-                    
-                    # Создаем конфиг для парсера
-                    config = self._create_config(links, settings, user_id)
-                    
-                    # Запускаем парсинг
-                    self._run_parser_for_user(user_id, config)
+                        
+                    for user_id in user_ids:
+                        settings = self.db.get_parser_settings(user_id)
+                        if not settings:
+                            settings = self._get_default_settings()
+                            
+                        # Создаем конфиг с фильтрами этого пользователя
+                        user_config = self._create_config([url], settings, user_id)
+                        
+                        # Фильтруем
+                        from parser.filters import AdsFilter
+                        filtered_ads = AdsFilter.filter_ads(ads, user_config)
+                        
+                        # Рассылаем
+                        if user_config.tg_notifications and self.bot:
+                            tg_handler = UserTgHandler(user_id, self.bot)
+                            for ad in filtered_ads:
+                                tg_handler.send_to_tg(ad=ad)
+                                
+                    time.sleep(10) # Пауза между ссылками
                 
-                # Пауза между циклами мониторинга
-                time.sleep(300)  # 5 минут
+                time.sleep(120) # Пауза между полными циклами обхода всех ссылок
                 
             except Exception as e:
                 logger.error(f"Ошибка в цикле мониторинга: {e}")
                 time.sleep(60)
-
-    def _get_active_users(self):
-        """Получает список активных пользователей"""
-        with sqlite3.connect(self.db.db_name) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT DISTINCT u.user_id 
-                FROM users u
-                JOIN subscriptions s ON u.user_id = s.user_id
-                WHERE s.is_active = TRUE AND s.end_date > ?
-            ''', (datetime.now(),))
-            return [row[0] for row in cursor.fetchall()]
 
     def _get_default_settings(self):
         """Возвращает настройки по умолчанию"""
@@ -117,10 +122,13 @@ class ParserService:
 
     def _create_config(self, links, settings, user_id):
         """Создает конфиг для парсера"""
+        # links может быть списком строк (URLs) или списком кортежей (старый формат из БД)
+        urls = [link[0] if isinstance(link, tuple) else link for link in links]
+        
         # Всегда используем мобильные прокси из базы данных
         # Настройки прокси пользователя игнорируются
         return AvitoConfig(
-            urls=[link[0] for link in links],
+            urls=urls,
             min_price=settings['min_price'],
             max_price=settings['max_price'],
             keys_word_white_list=settings['keys_word_white_list'],
@@ -144,20 +152,6 @@ class ParserService:
     def set_bot(self, bot_instance):
         """Устанавливает экземпляр бота для отправки сообщений"""
         self.bot = bot_instance
-
-    def _run_parser_for_user(self, user_id, config):
-        """Запускает парсер для пользователя"""
-        try:
-            parser = AvitoParse(config, stop_event=self.stop_event)
-            
-            # Переопределяем отправку в Telegram для отправки пользователю
-            if config.tg_notifications and self.bot:
-                parser.tg_handler = UserTgHandler(user_id, self.bot)
-            
-            parser.parse()
-            
-        except Exception as e:
-            logger.error(f"Ошибка парсинга для пользователя {user_id}: {e}")
 
 class UserTgHandler:
     """Обработчик для отправки уведомлений пользователю через бота"""

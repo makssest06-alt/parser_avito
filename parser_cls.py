@@ -166,6 +166,29 @@ class AvitoParse:
             logger.warning(f"Не удалось получить отрендеренную страницу Avito: {err}")
             return None
 
+    def get_ads_from_url(self, url: str) -> list[Item]:
+        html_code = self.fetch_data(url=url)
+        if not html_code:
+            logger.warning(f"Не удалось получить HTML для {url}")
+            return []
+
+        data_from_page = self.find_json_on_page(html_code=html_code)
+        catalog = data_from_page.get("data", {}).get("catalog") or {}
+        try:
+            ads_models = ItemsResponse(**catalog)
+            ads = self._clean_null_ads(ads=ads_models.items)
+        except ValidationError as err:
+            ads = self._parse_ads_from_dom(html_code=html_code)
+            if not ads:
+                rendered_html = self._get_manual_rendered_html(url)
+                ads = self._parse_ads_from_dom(html_code=rendered_html or "")
+                if not ads:
+                    logger.error(f"При валидации объявлений произошла ошибка: {err}")
+                    return []
+
+        ads = self._add_seller_to_ads(ads=ads)
+        return ads
+
     def parse(self):
         while not (self.stop_event and self.stop_event.is_set()):
             for url in self.config.urls:
