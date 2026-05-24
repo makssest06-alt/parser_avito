@@ -82,7 +82,10 @@ class AdsFilter:
         if not config.max_age:
             return ads
         try:
-            return [ad for ad in ads if ad.sortTimeStamp and AdsFilter._is_recent(ad.sortTimeStamp, config.max_age)]
+            return [
+                ad for ad in ads 
+                if not ad.sortTimeStamp or AdsFilter._is_recent(ad.sortTimeStamp, config.max_age)
+            ]
         except Exception as err:
             logger.debug(f"Ошибка при отсеивании старых объявлений: {err}")
             return ads

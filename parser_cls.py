@@ -111,9 +111,14 @@ class AvitoParse:
             if self.proxy_obj:
                 from mobile_proxy_manager import proxy_manager
                 proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, str(e))
-            self.cookies_manager.handle_block()
+                self.proxy_obj = self.get_proxy_obj() # Сразу берем новый прокси
             
-            # Фолбэк на ручное обновление через браузер (пока не прикрутили spfa.ru)
+            # Пробуем получить новые куки через API spfa.ru
+            if self.cookies_manager.handle_block():
+                logger.info("Сессия успешно обновлена через API. Повторяем запрос...")
+                return self.fetch_data(url)
+            
+            # Фолбэк на ручное обновление через браузер (если API нет или не сработало)
             if self._refresh_manual_session(url):
                 logger.info("Сессия успешно обновлена вручную. Повторяем запрос...")
                 return self.fetch_data(url)
