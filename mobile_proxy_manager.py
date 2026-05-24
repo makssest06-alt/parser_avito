@@ -1,10 +1,17 @@
 import logging
 import os
+from pathlib import Path
 from database import Database
 from dto import Proxy
 from typing import Optional
 
+from dotenv import load_dotenv
+
 logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env.local", override=True)
 
 class MobileProxyManager:
     def __init__(self):
@@ -40,9 +47,9 @@ class MobileProxyManager:
         self.db.update_proxy_stats(proxy_string, success=True)
 
     def mark_proxy_failed(self, proxy_string: str, reason: str):
-        """Отмечает неудачное использование прокси и отключает его"""
-        logger.warning(f"Прокси {proxy_string} заблокирован: {reason}")
-        self.db.disable_proxy(proxy_string, reason)
+        """Отмечает неудачное использование прокси без постоянного отключения."""
+        logger.warning(f"Прокси {proxy_string} получил ошибку: {reason}")
+        self.db.update_proxy_stats(proxy_string, success=False, fail_reason=reason)
 
     def add_proxy(self, proxy_string: str):
         """Добавляет новый прокси в базу"""

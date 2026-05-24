@@ -309,7 +309,13 @@ class Database:
         """Добавляет мобильный прокси."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute('INSERT OR IGNORE INTO mobile_proxies (proxy_string) VALUES (?)', (proxy_string,))
+            cursor.execute('''
+                INSERT INTO mobile_proxies (proxy_string, is_active)
+                VALUES (?, TRUE)
+                ON CONFLICT(proxy_string) DO UPDATE SET
+                    is_active = TRUE,
+                    last_fail_reason = NULL
+            ''', (proxy_string,))
             conn.commit()
 
     def get_random_active_proxy(self) -> Optional[str]:

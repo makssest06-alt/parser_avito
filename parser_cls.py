@@ -89,15 +89,17 @@ class AvitoParse:
         
         return f"http://{proxy_string}"
 
-    def fetch_data(self, url: str) -> str | None:
+    def fetch_data(self, url: str, block_retries: int = 2) -> str | None:
         proxy = self.get_formatted_proxy()
         cookies = self.cookies_manager.get_cookies()
+        user_agent = self.cookies_manager.get_user_agent()
 
         try:
             html_code = self.http_client.get(
                 url=url,
                 proxy=proxy,
                 cookies=cookies,
+                user_agent=user_agent,
                 retries=self.config.max_count_of_retry
             )
             self.good_request_count += 1
@@ -114,14 +116,18 @@ class AvitoParse:
                 self.proxy_obj = self.get_proxy_obj() # Сразу берем новый прокси
             
             # Пробуем получить новые куки через API spfa.ru
-            if self.cookies_manager.handle_block():
+            if block_retries > 0 and self.cookies_manager.handle_block():
                 logger.info("Сессия успешно обновлена через API. Повторяем запрос...")
-                return self.fetch_data(url)
+                return self.fetch_data(url, block_retries=block_retries - 1)
             
-            # Фолбэк на ручное обновление через браузер (если API нет или не сработало)
+            if self.cookies_manager.api_client:
+                logger.warning("SPFA API настроен, ручной браузерный фолбэк пропущен.")
+                return None
+
+            # Фолбэк на ручное обновление через браузер только для локального режима без API.
             if self._refresh_manual_session(url):
                 logger.info("Сессия успешно обновлена вручную. Повторяем запрос...")
-                return self.fetch_data(url)
+                return self.fetch_data(url, block_retries=block_retries - 1)
                 
             return None
         except ProxyError as e:
@@ -171,7 +177,7 @@ class AvitoParse:
             logger.warning(f"Не удалось получить отрендеренную страницу Avito: {err}")
             return None
 
-    def get_ads_from_url(self, url: str) -> list[Item]:
+    def get_ads_from_url(self, url: str, parse_retries: int = 1) -> list[Item]:
         html_code = self.fetch_data(url=url)
         if not html_code:
             logger.warning(f"Не удалось получить HTML для {url}")
@@ -185,6 +191,12 @@ class AvitoParse:
         except ValidationError as err:
             ads = self._parse_ads_from_dom(html_code=html_code)
             if not ads:
+                if self.cookies_manager.api_client:
+                    if parse_retries > 0 and self.cookies_manager.handle_block():
+                        logger.info("Пустой ответ Avito. Сессия обновлена через API, повторяем парсинг...")
+                        return self.get_ads_from_url(url, parse_retries=parse_retries - 1)
+                    logger.error(f"Не удалось извлечь объявления без браузерного фолбэка: {err}")
+                    return []
                 rendered_html = self._get_manual_rendered_html(url)
                 ads = self._parse_ads_from_dom(html_code=rendered_html or "")
                 if not ads:

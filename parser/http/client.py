@@ -29,7 +29,15 @@ class AvitoHttpClient:
             "Upgrade-Insecure-Requests": "1"
         })
 
-    def get(self, url: str, proxy: str = None, cookies: dict = None, retries: int = 3, timeout: int = 15) -> str:
+    def get(
+        self,
+        url: str,
+        proxy: str = None,
+        cookies: dict = None,
+        user_agent: str = None,
+        retries: int = 3,
+        timeout: int = 15,
+    ) -> str:
         """
         Выполняет GET запрос к Avito.
         Возвращает HTML текст страницы.
@@ -43,6 +51,7 @@ class AvitoHttpClient:
             impersonate = random.choice(IMPERSONATE_LIST) if self.use_random_impersonate else "chrome120"
             
             proxies = {"http": proxy, "https": proxy} if proxy else None
+            headers = {"User-Agent": user_agent} if user_agent else None
 
             try:
                 logger.debug(f"Запрос {url} (Попытка {attempt}/{retries}) | Impersonate: {impersonate} | Proxy: {proxy}")
@@ -51,6 +60,7 @@ class AvitoHttpClient:
                     impersonate=impersonate,
                     proxies=proxies,
                     cookies=cookies,
+                    headers=headers,
                     timeout=timeout
                 )
 
@@ -64,8 +74,14 @@ class AvitoHttpClient:
                     raise ProxyError(f"Ошибка прокси/сети после {retries} попыток: {e}")
                 time.sleep(2)
             except BlockError as e:
+                # Если 429 - мы можем подождать 1-2 секунды и попробовать снова с теми же куками
+                if "429" in str(e) and attempt < retries:
+                    logger.warning(f"Получен 429. Ждем 2 сек перед повтором (Попытка {attempt}/{retries})...")
+                    time.sleep(2)
+                    continue
+                    
                 logger.warning(f"Обнаружена блокировка: {e}")
-                # При блокировке нет смысла делать retry сразу с теми же куками/IP
+                # При 403 или повторяющемся 429 пробрасываем выше для смены IP/разблокировки
                 raise
             except Exception as e:
                 logger.error(f"Неизвестная ошибка: {e}")
