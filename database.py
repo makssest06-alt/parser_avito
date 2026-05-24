@@ -123,7 +123,10 @@ class Database:
                     fail_count INTEGER DEFAULT 0,
                     success_count INTEGER DEFAULT 0,
                     last_error TEXT,
+                    status_history_json TEXT,
                     last_unblock_time REAL DEFAULT 0,
+                    unblock_started_at REAL,
+                    last_purchase_at REAL,
                     last_used TIMESTAMP,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP

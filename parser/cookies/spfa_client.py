@@ -67,10 +67,13 @@ class SpfaApiClient:
                 timeout=10
             )
             
-            data = response.json() if response.status_code in [202, 404, 410] else {}
+            data = response.json() if response.status_code in [200, 202, 409, 404, 410] else {}
             
-            if response.status_code == 202 and data.get("success"):
+            if response.status_code in [200, 202] and data.get("success"):
                 logger.info(f"Запрос на разблокировку (ID: {cookie_id}) успешно отправлен.")
+                return True
+            if response.status_code == 409:
+                logger.info(f"Разблокировка (ID: {cookie_id}) уже выполняется.")
                 return True
             else:
                 logger.warning(f"Не удалось разблокировать сессию (Код {response.status_code}): {data.get('message')}")
