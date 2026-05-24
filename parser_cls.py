@@ -76,7 +76,7 @@ class AvitoParse:
         proxy_string = self.proxy_obj.proxy_string
         
         # Если прокси уже отформатирован с http/https
-        if proxy_string.startswith("http://") or proxy_string.startswith("https://"):
+        if proxy_string.startswith(("http://", "https://", "socks4://", "socks5://", "socks5h://")):
             return proxy_string
 
         # Пытаемся понять формат. 

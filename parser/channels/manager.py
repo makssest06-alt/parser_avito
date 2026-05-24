@@ -336,7 +336,7 @@ class ChannelManager:
 
     @staticmethod
     def _format_proxy(proxy_string: str) -> str:
-        if proxy_string.startswith("http://") or proxy_string.startswith("https://"):
+        if proxy_string.startswith(("http://", "https://", "socks4://", "socks5://", "socks5h://")):
             return proxy_string
 
         if "@" in proxy_string:

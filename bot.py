@@ -121,9 +121,10 @@ def add_proxy_command(message):
     if len(command_parts) < 2:
         bot.reply_to(message, 
                     "❌ Использование: /add_proxy [прокси]\n\n"
-                    "Формат: host:port@login:password\n\n"
+                    "Формат: login:password@host:port\n"
+                    "Для SOCKS можно указать схему: socks5://login:password@host:port\n\n"
                     "Пример:\n"
-                    "/add_proxy proxy.example.com:12345@login:password")
+                    "/add_proxy login:password@proxy.example.com:12345")
         return
     
     proxy_string = command_parts[1].strip()
@@ -133,9 +134,10 @@ def add_proxy_command(message):
         bot.reply_to(message, 
                     "❌ Неверный формат прокси!\n\n"
                     "Правильный формат:\n"
-                    "host:port@login:password\n\n"
+                    "login:password@host:port\n"
+                    "или socks5://login:password@host:port\n\n"
                     "Пример:\n"
-                    "proxy.example.com:12345@login:password")
+                    "login:password@proxy.example.com:12345")
         return
     
     try:
