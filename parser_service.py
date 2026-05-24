@@ -10,6 +10,8 @@ from models import Item
 import logging
 import re
 
+from config import ADMIN_IDS
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +28,7 @@ class ParserService:
         self.stop_event = threading.Event()
         self.thread = None
         self.bot = None  # Будет установлен позже
+        self.last_admin_alert = 0
 
     def start_monitoring(self):
         """Запускает мониторинг в фоновом режиме"""
@@ -73,6 +76,8 @@ class ParserService:
                     ads = parser.get_ads_from_url(url)
                     
                     if not ads:
+                        if parser.last_failure_reason == "NO_AVAILABLE_CHANNELS":
+                            self._notify_admin_no_channels()
                         time.sleep(10)
                         continue
                         
@@ -152,6 +157,26 @@ class ParserService:
     def set_bot(self, bot_instance):
         """Устанавливает экземпляр бота для отправки сообщений"""
         self.bot = bot_instance
+
+    def _notify_admin_no_channels(self):
+        """Sends a throttled alert when all proxy/cookie channels are unavailable."""
+        if not self.bot or not ADMIN_IDS:
+            return
+
+        now = time.time()
+        if now - self.last_admin_alert < 900:
+            return
+
+        self.last_admin_alert = now
+        message = (
+            "Avito parser: все parser channels недоступны. "
+            "Прокси в cooldown или пул пуст. Нужен новый прокси/IP или ожидание cooldown."
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                self.bot.send_message(admin_id, message)
+            except Exception as err:
+                logger.error(f"Не удалось отправить admin alert: {sanitize_error(err)}")
 
 class UserTgHandler:
     """Обработчик для отправки уведомлений пользователю через бота"""

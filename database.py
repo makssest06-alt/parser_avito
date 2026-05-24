@@ -111,6 +111,24 @@ class Database:
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS parser_channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proxy_string TEXT UNIQUE,
+                    spfa_id INTEGER,
+                    cookies_json TEXT,
+                    user_agent TEXT,
+                    status TEXT DEFAULT 'ready',
+                    cooldown_until TIMESTAMP,
+                    fail_count INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    last_unblock_time REAL DEFAULT 0,
+                    last_used TIMESTAMP,
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
 
     def add_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None):

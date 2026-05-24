@@ -20,6 +20,7 @@ from tg_sender import SendAdToTg
 from models import Item, ItemsResponse
 from parser.http.client import AvitoHttpClient
 from parser.cookies.manager import CookiesManager
+from parser.channels.manager import ChannelManager, ParserChannel
 from parser.http.exceptions import BlockError, ProxyError, FetchError
 
 DEBUG_MODE = False
@@ -43,6 +44,9 @@ class AvitoParse:
         
         self.http_client = AvitoHttpClient(use_random_impersonate=True)
         self.cookies_manager = CookiesManager()
+        self.channel_manager = ChannelManager()
+        self.current_channel: ParserChannel | None = None
+        self.last_failure_reason: str | None = None
         
         self.good_request_count = 0
         self.bad_request_count = 0
@@ -90,9 +94,21 @@ class AvitoParse:
         return f"http://{proxy_string}"
 
     def fetch_data(self, url: str, block_retries: int = 2) -> str | None:
-        proxy = self.get_formatted_proxy()
-        cookies = self.cookies_manager.get_cookies()
-        user_agent = self.cookies_manager.get_user_agent()
+        channel = self.channel_manager.acquire_channel()
+        self.current_channel = channel
+
+        if channel:
+            proxy = channel.formatted_proxy
+            cookies = channel.cookies
+            user_agent = channel.user_agent
+        else:
+            if self.channel_manager.api_client:
+                self.last_failure_reason = "NO_AVAILABLE_CHANNELS"
+                logger.warning("Нет доступных parser channels. Запрос Avito пропущен до освобождения прокси.")
+                return None
+            proxy = self.get_formatted_proxy()
+            cookies = self.cookies_manager.get_cookies()
+            user_agent = self.cookies_manager.get_user_agent()
 
         try:
             html_code = self.http_client.get(
@@ -103,16 +119,35 @@ class AvitoParse:
                 retries=self.config.max_count_of_retry
             )
             self.good_request_count += 1
-            if self.proxy_obj:
+            self.last_failure_reason = None
+            if channel:
+                self.channel_manager.mark_success(channel)
+            elif self.proxy_obj:
                 from mobile_proxy_manager import proxy_manager
                 proxy_manager.mark_proxy_success(self.proxy_obj.proxy_string)
             return html_code
         except BlockError as e:
             self.bad_request_count += 1
-            logger.warning(f"Блокировка Avito: {e}")
+            reason = str(e)
+            self.last_failure_reason = reason
+            logger.warning(f"Блокировка Avito: {reason}")
+
+            if channel:
+                if "429" in reason and block_retries > 0:
+                    if self.channel_manager.handle_rate_limit(channel):
+                        logger.info("Канал обработал 429. Повторяем запрос...")
+                        return self.fetch_data(url, block_retries=block_retries - 1)
+                    self.channel_manager.cooldown_channel(channel, reason, minutes=5)
+                    return self.fetch_data(url, block_retries=block_retries - 1)
+
+                self.channel_manager.cooldown_channel(channel, reason, minutes=15)
+                if block_retries > 0:
+                    return self.fetch_data(url, block_retries=block_retries - 1)
+                return None
+
             if self.proxy_obj:
                 from mobile_proxy_manager import proxy_manager
-                proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, str(e))
+                proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, reason)
                 self.proxy_obj = self.get_proxy_obj() # Сразу берем новый прокси
             
             # Пробуем получить новые куки через API spfa.ru
@@ -133,7 +168,10 @@ class AvitoParse:
         except ProxyError as e:
             self.bad_request_count += 1
             logger.warning(f"Ошибка прокси: {e}")
-            if self.proxy_obj:
+            self.last_failure_reason = str(e)
+            if channel:
+                self.channel_manager.cooldown_channel(channel, str(e), minutes=10)
+            elif self.proxy_obj:
                 from mobile_proxy_manager import proxy_manager
                 proxy_manager.mark_proxy_failed(self.proxy_obj.proxy_string, str(e))
             return None
@@ -159,7 +197,7 @@ class AvitoParse:
             html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
             if not html_code:
                 return False
-            self.load_cookies()
+            self.cookies_manager.load_local_session()
             return True
         except Exception as err:
             logger.warning(f"Не удалось обновить Avito-сессию вручную: {err}")
@@ -171,7 +209,7 @@ class AvitoParse:
 
             html_code = refresh_avito_session(url=url, timeout_seconds=900, return_html=True)
             if html_code:
-                self.load_cookies()
+                self.cookies_manager.load_local_session()
             return html_code
         except Exception as err:
             logger.warning(f"Не удалось получить отрендеренную страницу Avito: {err}")
@@ -191,9 +229,10 @@ class AvitoParse:
         except ValidationError as err:
             ads = self._parse_ads_from_dom(html_code=html_code)
             if not ads:
-                if self.cookies_manager.api_client:
-                    if parse_retries > 0 and self.cookies_manager.handle_block():
-                        logger.info("Пустой ответ Avito. Сессия обновлена через API, повторяем парсинг...")
+                if self.channel_manager.api_client:
+                    if parse_retries > 0 and self.current_channel:
+                        self.channel_manager.refresh_cookies(self.current_channel)
+                        logger.info("Пустой ответ Avito. Cookies канала обновлены, повторяем парсинг...")
                         return self.get_ads_from_url(url, parse_retries=parse_retries - 1)
                     logger.error(f"Не удалось извлечь объявления без браузерного фолбэка: {err}")
                     return []
