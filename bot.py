@@ -166,9 +166,10 @@ def proxy_status_command(message):
         
         for proxy in proxies:
             proxy_string, is_active, success_count, fail_count, last_fail_reason = proxy
+            proxy_masked = _mask_proxy_for_display(proxy_string)
             status = "✅ Активен" if is_active else "❌ Отключен"
             status_text += (
-                f"• `{proxy_string}`\n"
+                f"• `{proxy_masked}`\n"
                 f"  Статус: {status}\n"
                 f"  Успешно: {success_count}, Ошибок: {fail_count}\n"
             )
