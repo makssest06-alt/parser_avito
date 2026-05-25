@@ -205,11 +205,11 @@ def channels_status_command(message):
 
         status_text = "📊 *Parser channels:*\n\n"
         for channel in channels:
-            channel_id, proxy_string, spfa_id, status, cooldown_until, success_count, fail_count, last_error, updated_date = channel
+            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date = channel
             proxy_masked = _mask_proxy_for_display(proxy_string)
             status_text += (
                 f"#{channel_id} `{proxy_masked}`\n"
-                f"Статус: `{status}` | SPFA ID: `{spfa_id or '-'}`\n"
+                f"Статус: `{status}` | SPFA ID: `{spfa_id or '-'}` | TLS: `{impersonate or '-'}`\n"
                 f"Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
             )
             if cooldown_until:
@@ -266,6 +266,73 @@ def disable_channel_command(message):
         bot.reply_to(message, "❌ Использование: /disable_channel <id> [причина]")
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка отключения channel: {str(e)}")
+
+@bot.message_handler(commands=['test_channel'])
+def test_channel_command(message):
+    """Диагностика канала без изменения cooldown/status (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        channel_id = int(message.text.split(maxsplit=1)[1])
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /test_channel <id>")
+        return
+
+    try:
+        report = _run_channel_diagnostic(channel_id)
+        bot.reply_to(message, report)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка диагностики channel: {str(e)}")
+
+def _run_channel_diagnostic(channel_id: int) -> str:
+    from parser.channels.manager import ChannelManager
+    from parser.http.client import AvitoHttpClient
+    from parser.http.exceptions import BlockError, ProxyError, FetchError
+
+    manager = ChannelManager()
+    channel = manager.get_channel(channel_id)
+    if not channel:
+        return f"Channel #{channel_id} не найден."
+    if not channel.impersonate:
+        manager.assign_impersonate(channel)
+        channel = manager.get_channel(channel_id)
+
+    client = AvitoHttpClient(use_random_impersonate=False)
+    checks = [
+        ("ipinfo", "https://ipinfo.io/json", None),
+        ("avito_home_no_cookies", "https://www.avito.ru", None),
+        ("avito_category_no_cookies", "https://www.avito.ru/moskva/telefony/apple-ASgBAgICAUTkAwQ", None),
+    ]
+    if channel.cookies:
+        checks.append(("avito_category_with_cookies", "https://www.avito.ru/moskva/telefony/apple-ASgBAgICAUTkAwQ", channel.cookies))
+
+    lines = [
+        f"Channel #{channel.id}: {_mask_proxy_for_display(channel.proxy_string)}",
+        f"TLS: {channel.impersonate or '-'} | SPFA: {channel.spfa_id or '-'}",
+    ]
+
+    for name, url, cookies in checks:
+        try:
+            result = client.get_response(
+                url=url,
+                proxy=channel.formatted_proxy,
+                cookies=cookies,
+                user_agent=channel.user_agent,
+                impersonate=channel.impersonate or "chrome136",
+                retries=1,
+                timeout=20,
+            )
+            marker = "catalog" if "catalog" in result.text else "no_catalog"
+            lines.append(f"{name}: OK {result.status_code}, len={len(result.text)}, {marker}")
+        except BlockError as err:
+            lines.append(f"{name}: BLOCK {err.status_code or '-'} {str(err)[:120]}")
+        except (ProxyError, FetchError) as err:
+            lines.append(f"{name}: ERROR {str(err)[:120]}")
+
+    return "\n".join(lines)
 
 def _get_or_create_parser_settings(user_id: int) -> dict:
     settings = db.get_parser_settings(user_id)

@@ -118,6 +118,7 @@ class Database:
                     spfa_id INTEGER,
                     cookies_json TEXT,
                     user_agent TEXT,
+                    impersonate TEXT,
                     status TEXT DEFAULT 'ready',
                     cooldown_until TIMESTAMP,
                     fail_count INTEGER DEFAULT 0,
@@ -132,7 +133,20 @@ class Database:
                     updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            self._ensure_columns(cursor, 'parser_channels', {
+                'impersonate': 'TEXT',
+                'status_history_json': 'TEXT',
+                'unblock_started_at': 'REAL',
+                'last_purchase_at': 'REAL',
+            })
             conn.commit()
+
+    @staticmethod
+    def _ensure_columns(cursor, table_name: str, columns: dict):
+        existing = {row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        for column_name, column_type in columns.items():
+            if column_name not in existing:
+                cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
     def add_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None):
         """Добавляет или обновляет пользователя."""
@@ -401,7 +415,7 @@ class Database:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, proxy_string, spfa_id, status, cooldown_until,
+                SELECT id, proxy_string, spfa_id, impersonate, status, cooldown_until,
                        success_count, fail_count, last_error, updated_date
                 FROM parser_channels
                 ORDER BY id

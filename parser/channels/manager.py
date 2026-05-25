@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ class ParserChannel:
     formatted_proxy: str
     cookies: dict | None
     user_agent: str | None
+    impersonate: str | None
     spfa_id: int | None
     fail_count: int
     success_count: int
@@ -45,6 +47,7 @@ class ChannelManager:
     UNBLOCK_TIMEOUT = 300
     WAIT_FIRST_FOR_UNBLOCK = 5
     WAIT_FOR_UNBLOCK = 10
+    IMPERSONATE_LIST = ["chrome136", "chrome131", "chrome124", "chrome120", "edge"]
 
     def __init__(self, db_name: str = "users.db"):
         self.db = Database(db_name)
@@ -64,7 +67,8 @@ class ChannelManager:
             cursor.execute('''
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
-                       pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at
+                       pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
+                       pc.impersonate
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 WHERE mp.is_active = TRUE
@@ -79,6 +83,10 @@ class ChannelManager:
             return None
 
         channel = self._row_to_channel(row)
+        if not channel.impersonate:
+            self.assign_impersonate(channel)
+            channel = self.get_channel(channel.id)
+
         if self._unblock_before_reuse(channel):
             channel = self.get_channel(channel.id)
 
@@ -98,7 +106,8 @@ class ChannelManager:
             cursor.execute('''
                 SELECT id, proxy_string, spfa_id, cookies_json, user_agent,
                        fail_count, success_count, last_unblock_time, last_error,
-                       status_history_json, unblock_started_at, last_purchase_at
+                       status_history_json, unblock_started_at, last_purchase_at,
+                       impersonate
                 FROM parser_channels
                 WHERE id = ?
             ''', (channel_id,))
@@ -120,6 +129,30 @@ class ChannelManager:
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (self._status_history_json(channel, 200), channel.id))
+            conn.commit()
+
+    def update_cookies(self, channel: ParserChannel, response_cookies: dict):
+        if not response_cookies:
+            return
+
+        merged = dict(channel.cookies or {})
+        merged.update(response_cookies)
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET cookies_json = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (json.dumps(merged, ensure_ascii=False), channel.id))
+            conn.commit()
+
+    def assign_impersonate(self, channel: ParserChannel):
+        impersonate = random.choice(self.IMPERSONATE_LIST)
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET impersonate = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (impersonate, channel.id))
             conn.commit()
 
     def cooldown_channel(self, channel: ParserChannel, reason: str, minutes: int = 15):
@@ -185,6 +218,7 @@ class ChannelManager:
 
     def _ensure_schema(self):
         columns = {
+            "impersonate": "TEXT",
             "status_history_json": "TEXT",
             "unblock_started_at": "REAL",
             "last_purchase_at": "REAL",
@@ -251,6 +285,7 @@ class ChannelManager:
             spfa_id=row[2],
             cookies=cookies,
             user_agent=row[4],
+            impersonate=row[12],
             fail_count=row[5] or 0,
             success_count=row[6] or 0,
             last_unblock_time=row[7] or 0,

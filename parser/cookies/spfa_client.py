@@ -1,5 +1,6 @@
 import requests
 import logging
+import os
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -9,8 +10,11 @@ class SpfaApiClient:
     
     BASE_URL = "https://spfa.ru/api" 
     
-    def __init__(self, token: str):
+    def __init__(self, token: str, full_format: bool | None = None):
         self.token = token
+        if full_format is None:
+            full_format = os.getenv("SPFA_FULL_COOKIES", "false").strip().lower() in {"1", "true", "yes", "on"}
+        self.full_format = full_format
         
     def get_balance(self) -> float:
         """Получает текущий баланс в рублях."""
@@ -36,7 +40,7 @@ class SpfaApiClient:
         try:
             response = requests.post(
                 f"{self.BASE_URL}/cookies/", 
-                json={"api_key": self.token, "full_format": False},
+                json={"api_key": self.token, "full_format": self.full_format},
                 timeout=15
             )
             

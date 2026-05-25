@@ -93,7 +93,7 @@ class AvitoParse:
         
         return f"http://{proxy_string}"
 
-    def fetch_data(self, url: str, block_retries: int = 2) -> str | None:
+    def fetch_data(self, url: str, block_retries: int = 1) -> str | None:
         channel = self.channel_manager.acquire_channel()
         self.current_channel = channel
 
@@ -101,6 +101,7 @@ class AvitoParse:
             proxy = channel.formatted_proxy
             cookies = channel.cookies
             user_agent = channel.user_agent
+            impersonate = channel.impersonate
         else:
             if self.channel_manager.api_client:
                 self.last_failure_reason = "NO_AVAILABLE_CHANNELS"
@@ -109,23 +110,26 @@ class AvitoParse:
             proxy = self.get_formatted_proxy()
             cookies = self.cookies_manager.get_cookies()
             user_agent = self.cookies_manager.get_user_agent()
+            impersonate = None
 
         try:
-            html_code = self.http_client.get(
+            result = self.http_client.get_response(
                 url=url,
                 proxy=proxy,
                 cookies=cookies,
                 user_agent=user_agent,
+                impersonate=impersonate,
                 retries=self.config.max_count_of_retry
             )
             self.good_request_count += 1
             self.last_failure_reason = None
             if channel:
+                self.channel_manager.update_cookies(channel, result.cookies)
                 self.channel_manager.mark_success(channel)
             elif self.proxy_obj:
                 from mobile_proxy_manager import proxy_manager
                 proxy_manager.mark_proxy_success(self.proxy_obj.proxy_string)
-            return html_code
+            return result.text
         except BlockError as e:
             self.bad_request_count += 1
             reason = str(e)
@@ -133,6 +137,7 @@ class AvitoParse:
             logger.warning(f"Блокировка Avito: {reason}")
 
             if channel:
+                self.channel_manager.update_cookies(channel, e.response_cookies)
                 if "429" in reason and block_retries > 0:
                     if self.channel_manager.handle_rate_limit(channel):
                         logger.info("Канал обработал 429. Повторяем запрос...")
@@ -230,6 +235,9 @@ class AvitoParse:
             ads = self._parse_ads_from_dom(html_code=html_code)
             if not ads:
                 if self.channel_manager.api_client:
+                    if "catalog" in html_code:
+                        logger.error(f"HTML содержит catalog, но парсер не смог извлечь объявления: {err}")
+                        return []
                     if parse_retries > 0 and self.current_channel:
                         self.channel_manager.refresh_cookies(self.current_channel)
                         logger.info("Пустой ответ Avito. Cookies канала обновлены, повторяем парсинг...")
@@ -309,31 +317,29 @@ class AvitoParse:
     def find_json_on_page(html_code, data_type: str = "mime") -> dict:
         soup = BeautifulSoup(html_code, "html.parser")
         fallback = {}
-        try:
-            for _script in soup.select('script'):
-                script_type = _script.get('type')
+        for _script in soup.select('script'):
+            script_type = _script.get('type')
+            script_text = _script.text or ""
+            if data_type == 'mime' and script_type != 'mime/invalid' and 'catalog' not in script_text:
+                continue
 
-                if data_type == 'mime' and script_type == 'mime/invalid':
-                    script_content = html.unescape(_script.text)
-                    parsed_data = json.loads(script_content)
+            try:
+                script_content = html.unescape(script_text)
+                parsed_data = json.loads(script_content)
+            except Exception:
+                continue
 
-                    if 'state' in parsed_data:
-                        state = parsed_data['state']
-                        if state.get("data", {}).get("catalog"):
-                            return state
-                        fallback = state
-
-                    elif 'data' in parsed_data:
-                        logger.info("data")
-                        if parsed_data['data'].get("catalog"):
-                            return parsed_data['data']
-                        fallback = parsed_data['data']
-
-                    else:
-                        fallback = parsed_data
-
-        except Exception as err:
-            logger.error(f"Ошибка при поиске информации на странице: {err}")
+            if 'state' in parsed_data:
+                state = parsed_data['state']
+                if state.get("data", {}).get("catalog"):
+                    return state
+                fallback = state
+            elif parsed_data.get("data", {}).get("catalog"):
+                return parsed_data
+            elif 'data' in parsed_data:
+                fallback = parsed_data
+            else:
+                fallback = parsed_data
         return fallback
 
     @staticmethod
