@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import time
 import urllib.error
@@ -39,6 +40,7 @@ class ParserChannel:
     status_history: list[int]
     unblock_started_at: float | None
     last_purchase_at: float | None
+    last_warmup_at: float
     proxy_type: str
     change_ip_url: str
     last_ip_change: float
@@ -55,6 +57,7 @@ class ChannelManager:
     MIN_CHANNEL_REUSE_SECONDS = int(os.getenv("MIN_CHANNEL_REUSE_SECONDS", "60"))
     MOBILE_IP_CHANGE_COOLDOWN_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_COOLDOWN_SECONDS", "120"))
     MOBILE_IP_CHANGE_WAIT_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_WAIT_SECONDS", "20"))
+    WARMUP_TTL_SECONDS = int(os.getenv("CHANNEL_WARMUP_TTL_SECONDS", "1800"))
     IMPERSONATE_LIST = ["chrome136", "chrome131", "chrome124", "chrome120", "edge"]
 
     def __init__(self, db_name: str = "users.db"):
@@ -77,7 +80,7 @@ class ChannelManager:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
-                       pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
                        COALESCE(mp.last_ip_change, 0)
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
@@ -95,7 +98,11 @@ class ChannelManager:
             return None
 
         channel = self._row_to_channel(row)
-        if not channel.impersonate:
+        desired_impersonate = self._impersonate_for_user_agent(channel.user_agent)
+        if desired_impersonate and desired_impersonate != channel.impersonate:
+            self.assign_impersonate(channel, desired_impersonate)
+            channel = self.get_channel(channel.id)
+        elif not channel.impersonate:
             self.assign_impersonate(channel)
             channel = self.get_channel(channel.id)
 
@@ -119,7 +126,7 @@ class ChannelManager:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
-                       pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
                        COALESCE(mp.last_ip_change, 0)
                 FROM parser_channels pc
                 LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
@@ -159,8 +166,26 @@ class ChannelManager:
             ''', (json.dumps(merged, ensure_ascii=False), channel.id))
             conn.commit()
 
-    def assign_impersonate(self, channel: ParserChannel):
-        impersonate = random.choice(self.IMPERSONATE_LIST)
+    def should_warmup(self, channel: ParserChannel) -> bool:
+        if not channel.cookies:
+            return False
+        if not channel.last_warmup_at:
+            return True
+        return time.time() - channel.last_warmup_at > self.WARMUP_TTL_SECONDS
+
+    def mark_warmup_success(self, channel: ParserChannel, response_cookies: dict):
+        if response_cookies:
+            self.update_cookies(channel, response_cookies)
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET last_warmup_at = ?, updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (time.time(), channel.id))
+            conn.commit()
+
+    def assign_impersonate(self, channel: ParserChannel, impersonate: str | None = None):
+        impersonate = impersonate or random.choice(self.IMPERSONATE_LIST)
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''
                 UPDATE parser_channels
@@ -223,6 +248,7 @@ class ChannelManager:
         cookie_id, cookies, user_agent = self.api_client.get_new_session()
         if not cookies:
             return False
+        impersonate = self._impersonate_for_user_agent(user_agent) or random.choice(self.IMPERSONATE_LIST)
 
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''
@@ -230,17 +256,19 @@ class ChannelManager:
                 SET spfa_id = ?,
                     cookies_json = ?,
                     user_agent = ?,
+                    impersonate = ?,
                     last_unblock_time = 0,
                     unblock_started_at = NULL,
                     last_purchase_at = ?,
+                    last_warmup_at = 0,
                     status_history_json = '[]',
                     status = 'ready',
                     cooldown_until = NULL,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
-            ''', (cookie_id, json.dumps(cookies, ensure_ascii=False), user_agent or "", time.time(), channel.id))
+            ''', (cookie_id, json.dumps(cookies, ensure_ascii=False), user_agent or "", impersonate, time.time(), channel.id))
             conn.commit()
-        logger.info(f"Канал #{channel.id}: получены новые cookies #{cookie_id}.")
+        logger.info(f"Канал #{channel.id}: получены новые cookies #{cookie_id}, TLS {impersonate}.")
         return True
 
     def _ensure_schema(self):
@@ -249,6 +277,7 @@ class ChannelManager:
             "status_history_json": "TEXT",
             "unblock_started_at": "REAL",
             "last_purchase_at": "REAL",
+            "last_warmup_at": "REAL DEFAULT 0",
         }
         with sqlite3.connect(self.db_name) as conn:
             existing = {row[1] for row in conn.execute("PRAGMA table_info(parser_channels)").fetchall()}
@@ -312,7 +341,8 @@ class ChannelManager:
             spfa_id=row[2],
             cookies=cookies,
             user_agent=row[4],
-            impersonate=row[12],
+            last_warmup_at=row[12] or 0,
+            impersonate=row[13],
             fail_count=row[5] or 0,
             success_count=row[6] or 0,
             last_unblock_time=row[7] or 0,
@@ -320,9 +350,9 @@ class ChannelManager:
             status_history=status_history,
             unblock_started_at=row[10],
             last_purchase_at=row[11],
-            proxy_type=row[13] or "server",
-            change_ip_url=row[14] or "",
-            last_ip_change=row[15] or 0,
+            proxy_type=row[14] or "server",
+            change_ip_url=row[15] or "",
+            last_ip_change=row[16] or 0,
         )
 
     def _change_mobile_ip(self, channel: ParserChannel, reason: str) -> bool:
@@ -348,6 +378,7 @@ class ChannelManager:
             return False
 
         self.db.mark_mobile_ip_changed(channel.proxy_string, now)
+        self._reset_warmup(channel.id)
         time.sleep(self.MOBILE_IP_CHANGE_WAIT_SECONDS)
         return True
 
@@ -389,6 +420,7 @@ class ChannelManager:
                 UPDATE parser_channels
                 SET last_unblock_time = ?,
                     unblock_started_at = ?,
+                    last_warmup_at = 0,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (now, now, channel.id))
@@ -425,6 +457,26 @@ class ChannelManager:
             return 401
         return None
 
+    @classmethod
+    def _impersonate_for_user_agent(cls, user_agent: str | None) -> str | None:
+        if not user_agent:
+            return None
+        if "Edg/" in user_agent or "Edge/" in user_agent:
+            return "edge"
+
+        match = re.search(r"Chrome/(\d+)", user_agent)
+        if not match:
+            return None
+
+        version = int(match.group(1))
+        if version >= 136:
+            return "chrome136"
+        if version >= 131:
+            return "chrome131"
+        if version >= 124:
+            return "chrome124"
+        return "chrome120"
+
     @staticmethod
     def _format_proxy(proxy_string: str) -> str:
         if proxy_string.startswith(("http://", "https://", "socks4://", "socks5://", "socks5h://")):
@@ -443,6 +495,15 @@ class ChannelManager:
             conn.execute('''
                 UPDATE parser_channels
                 SET last_used = CURRENT_TIMESTAMP, updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (channel_id,))
+            conn.commit()
+
+    def _reset_warmup(self, channel_id: int):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET last_warmup_at = 0, updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (channel_id,))
             conn.commit()

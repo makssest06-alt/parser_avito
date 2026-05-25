@@ -138,6 +138,7 @@ class Database:
                     last_unblock_time REAL DEFAULT 0,
                     unblock_started_at REAL,
                     last_purchase_at REAL,
+                    last_warmup_at REAL DEFAULT 0,
                     last_used TIMESTAMP,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -148,6 +149,7 @@ class Database:
                 'status_history_json': 'TEXT',
                 'unblock_started_at': 'REAL',
                 'last_purchase_at': 'REAL',
+                'last_warmup_at': 'REAL DEFAULT 0',
             })
             conn.commit()
 

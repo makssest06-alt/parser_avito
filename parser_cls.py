@@ -113,12 +113,32 @@ class AvitoParse:
             impersonate = None
 
         try:
+            if channel and self.channel_manager.should_warmup(channel):
+                logger.info(f"Канал #{channel.id}: прогрев через главную Avito перед рабочим запросом.")
+                warmup_result = self.http_client.get_response(
+                    url="https://www.avito.ru/",
+                    proxy=proxy,
+                    cookies=cookies,
+                    user_agent=user_agent,
+                    impersonate=impersonate,
+                    retries=1,
+                    timeout=20,
+                )
+                self.channel_manager.mark_warmup_success(channel, warmup_result.cookies)
+                channel = self.channel_manager.get_channel(channel.id) or channel
+                self.current_channel = channel
+                cookies = channel.cookies
+                user_agent = channel.user_agent
+                impersonate = channel.impersonate
+                time.sleep(random.uniform(2.0, 5.0))
+
             result = self.http_client.get_response(
                 url=url,
                 proxy=proxy,
                 cookies=cookies,
                 user_agent=user_agent,
                 impersonate=impersonate,
+                referer="https://www.avito.ru/",
                 retries=self.config.max_count_of_retry
             )
             self.good_request_count += 1

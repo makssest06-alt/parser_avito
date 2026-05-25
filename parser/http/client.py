@@ -1,7 +1,9 @@
 import random
+import re
 import time
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
@@ -19,6 +21,14 @@ IMPERSONATE_LIST = [
     "edge",
 ]
 
+DEFAULT_USER_AGENTS = {
+    "chrome136": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+    "chrome131": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "chrome124": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "chrome120": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "edge": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
+}
+
 
 @dataclass
 class FetchResult:
@@ -30,17 +40,6 @@ class FetchResult:
 class AvitoHttpClient:
     def __init__(self, use_random_impersonate: bool = True):
         self.use_random_impersonate = use_random_impersonate
-        self.session = requests.Session()
-        # Базовые заголовки, чтобы быть похожими на реальный браузер (будут дополняться curl_cffi)
-        self.session.headers.update({
-            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1"
-        })
 
     def get(
         self,
@@ -67,6 +66,7 @@ class AvitoHttpClient:
         cookies: dict = None,
         user_agent: str = None,
         impersonate: str = None,
+        referer: str = None,
         retries: int = 3,
         timeout: int = 15,
     ) -> FetchResult:
@@ -83,18 +83,24 @@ class AvitoHttpClient:
             current_impersonate = impersonate or (random.choice(IMPERSONATE_LIST) if self.use_random_impersonate else "chrome136")
             
             proxies = {"http": proxy, "https": proxy} if proxy else None
-            headers = {"User-Agent": user_agent} if user_agent else None
+            headers = self._build_headers(
+                url=url,
+                user_agent=user_agent,
+                impersonate=current_impersonate,
+                referer=referer,
+            )
 
             try:
                 logger.debug(f"Запрос {url} (Попытка {attempt}/{retries}) | Impersonate: {current_impersonate} | Proxy: {proxy}")
-                response = self.session.get(
-                    url,
-                    impersonate=current_impersonate,
-                    proxies=proxies,
-                    cookies=cookies,
-                    headers=headers,
-                    timeout=timeout
-                )
+                with requests.Session() as session:
+                    response = session.get(
+                        url,
+                        impersonate=current_impersonate,
+                        proxies=proxies,
+                        cookies=cookies,
+                        headers=headers,
+                        timeout=timeout
+                    )
 
                 self._check_for_blocks(response)
                 
@@ -164,3 +170,67 @@ class AvitoHttpClient:
             return dict(response.cookies)
         except Exception:
             return {}
+
+    def _build_headers(self, url: str, user_agent: str | None, impersonate: str, referer: str | None) -> dict:
+        chrome_major = self._profile_major(impersonate)
+        effective_user_agent = self._normalize_user_agent(user_agent, impersonate, chrome_major)
+        platform = "Windows"
+        sec_ch_ua = self._sec_ch_ua(effective_user_agent, chrome_major)
+
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Priority": "u=0, i",
+            "Sec-CH-UA": sec_ch_ua,
+            "Sec-CH-UA-Mobile": "?0",
+            "Sec-CH-UA-Platform": f'"{platform}"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": self._sec_fetch_site(url, referer),
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": effective_user_agent,
+        }
+        if referer:
+            headers["Referer"] = referer
+        return headers
+
+    @staticmethod
+    def _chrome_major(user_agent: str) -> str | None:
+        match = re.search(r"(?:Chrome|Edg)/(\d+)", user_agent or "")
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _profile_major(impersonate: str) -> str:
+        match = re.search(r"(\d+)", impersonate or "")
+        return match.group(1) if match else "136"
+
+    def _normalize_user_agent(self, user_agent: str | None, impersonate: str, chrome_major: str) -> str:
+        if not user_agent:
+            return DEFAULT_USER_AGENTS.get(impersonate) or DEFAULT_USER_AGENTS["chrome136"]
+
+        if impersonate == "edge":
+            if "Edg/" not in user_agent and "Edge/" not in user_agent:
+                return DEFAULT_USER_AGENTS["edge"]
+            return re.sub(r"(Chrome|Edg)/(\d+)", rf"\g<1>/{chrome_major}", user_agent)
+
+        if "Chrome/" not in user_agent or "Edg/" in user_agent or "Edge/" in user_agent:
+            return DEFAULT_USER_AGENTS.get(impersonate) or DEFAULT_USER_AGENTS["chrome136"]
+        return re.sub(r"Chrome/(\d+)", f"Chrome/{chrome_major}", user_agent)
+
+    @staticmethod
+    def _sec_ch_ua(user_agent: str, chrome_major: str) -> str:
+        if "Edg/" in user_agent or "Edge/" in user_agent:
+            return f'"Chromium";v="{chrome_major}", "Microsoft Edge";v="{chrome_major}", "Not.A/Brand";v="24"'
+        return f'"Chromium";v="{chrome_major}", "Google Chrome";v="{chrome_major}", "Not.A/Brand";v="24"'
+
+    @staticmethod
+    def _sec_fetch_site(url: str, referer: str | None) -> str:
+        if not referer:
+            return "none"
+        try:
+            return "same-origin" if urlparse(url).netloc == urlparse(referer).netloc else "cross-site"
+        except Exception:
+            return "same-origin"
