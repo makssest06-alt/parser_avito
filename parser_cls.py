@@ -227,7 +227,7 @@ class AvitoParse:
             return []
 
         data_from_page = self.find_json_on_page(html_code=html_code)
-        catalog = data_from_page.get("data", {}).get("catalog") or {}
+        catalog = data_from_page.get("catalog") or data_from_page.get("data", {}).get("catalog") or {}
         try:
             ads_models = ItemsResponse(**catalog)
             ads = self._clean_null_ads(ads=ads_models.items)
@@ -271,7 +271,7 @@ class AvitoParse:
                     continue
 
                 data_from_page = self.find_json_on_page(html_code=html_code)
-                catalog = data_from_page.get("data", {}).get("catalog") or {}
+                catalog = data_from_page.get("catalog") or data_from_page.get("data", {}).get("catalog") or {}
                 try:
                     ads_models = ItemsResponse(**catalog)
                     ads = self._clean_null_ads(ads=ads_models.items)
@@ -331,8 +331,9 @@ class AvitoParse:
 
             if 'state' in parsed_data:
                 state = parsed_data['state']
-                if state.get("data", {}).get("catalog"):
-                    return state
+                state_data = state.get("data", {})
+                if state_data.get("catalog"):
+                    return state_data
                 fallback = state
             elif parsed_data.get("data", {}).get("catalog"):
                 return parsed_data

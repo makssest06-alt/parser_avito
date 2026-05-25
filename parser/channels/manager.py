@@ -47,6 +47,7 @@ class ChannelManager:
     UNBLOCK_TIMEOUT = 300
     WAIT_FIRST_FOR_UNBLOCK = 5
     WAIT_FOR_UNBLOCK = 10
+    MIN_CHANNEL_REUSE_SECONDS = int(os.getenv("MIN_CHANNEL_REUSE_SECONDS", "60"))
     IMPERSONATE_LIST = ["chrome136", "chrome131", "chrome124", "chrome120", "edge"]
 
     def __init__(self, db_name: str = "users.db"):
@@ -62,6 +63,7 @@ class ChannelManager:
     def acquire_channel(self) -> Optional[ParserChannel]:
         """Returns the least recently used channel that is not cooling down."""
         self._ensure_channels_for_active_proxies()
+        min_reuse_time = (datetime.now() - timedelta(seconds=self.MIN_CHANNEL_REUSE_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -72,10 +74,12 @@ class ChannelManager:
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 WHERE mp.is_active = TRUE
+                  AND pc.status != 'disabled'
                   AND (pc.cooldown_until IS NULL OR pc.cooldown_until <= ?)
-                ORDER BY pc.last_used IS NOT NULL, pc.last_used ASC, pc.fail_count ASC
+                  AND (pc.last_used IS NULL OR pc.last_used <= ?)
+                ORDER BY pc.fail_count ASC, pc.success_count DESC, pc.last_used IS NOT NULL, pc.last_used ASC
                 LIMIT 1
-            ''', (datetime.now().isoformat(),))
+            ''', (datetime.now().isoformat(), min_reuse_time))
             row = cursor.fetchone()
 
         if not row:
