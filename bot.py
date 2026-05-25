@@ -500,7 +500,7 @@ def _run_channel_diagnostic(channel_id: int) -> str:
                 retries=1,
                 timeout=20,
             )
-            marker = "catalog" if "catalog" in result.text else "no_catalog"
+            marker = "listing" if _has_listing_signal(result.text) else "no_listing"
             results[name] = ("ok", result.status_code, marker)
             lines.append(f"{name}: OK {result.status_code}, len={len(result.text)}, {marker}")
         except BlockError as err:
@@ -519,7 +519,7 @@ def _run_channel_diagnostic(channel_id: int) -> str:
 def _diagnose_channel_results(results: dict) -> str:
     no_cookie = results.get("avito_category_no_cookies")
     with_cookie = results.get("avito_category_with_cookies")
-    if no_cookie and no_cookie[0] == "ok" and no_cookie[2] == "catalog":
+    if no_cookie and no_cookie[0] == "ok" and no_cookie[2] == "listing":
         if with_cookie and with_cookie[0] == "block":
             return "cookies_bad_proxy_ok"
         if with_cookie and with_cookie[0] == "ok":
@@ -528,6 +528,22 @@ def _diagnose_channel_results(results: dict) -> str:
     if no_cookie and no_cookie[0] == "block":
         return "proxy_or_ip_blocked_without_cookies"
     return "unknown"
+
+def _has_listing_signal(html_text: str) -> bool:
+    if not html_text:
+        return False
+    try:
+        from parser_cls import AvitoParse
+
+        parsed_data = AvitoParse.find_json_on_page(html_text)
+        catalog = parsed_data.get("catalog") or parsed_data.get("data", {}).get("catalog") or {}
+        items = catalog.get("items") if isinstance(catalog, dict) else None
+        if isinstance(items, list) and items:
+            return True
+    except Exception:
+        pass
+
+    return 'data-marker="item"' in html_text or "iva-item-root" in html_text
 
 def _get_or_create_parser_settings(user_id: int) -> dict:
     settings = db.get_parser_settings(user_id)

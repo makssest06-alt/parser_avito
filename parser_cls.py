@@ -143,6 +143,12 @@ class AvitoParse:
                 referer="https://www.avito.ru/",
                 retries=self.config.max_count_of_retry
             )
+            if self._is_challenge_page(result.text):
+                raise BlockError(
+                    "Avito Captcha: Требуется разгадать капчу",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
             self.good_request_count += 1
             self.last_failure_reason = None
             if channel:
@@ -228,6 +234,12 @@ class AvitoParse:
                 retries=1,
                 timeout=20,
             )
+            if self._is_challenge_page(result.text):
+                raise BlockError(
+                    "Avito Captcha: Требуется разгадать капчу",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
             return result.text
         except (BlockError, ProxyError, FetchError) as err:
             logger.warning(f"No-cookie retry for channel #{channel.id} failed: {err}")
@@ -243,9 +255,16 @@ class AvitoParse:
         text = BeautifulSoup(html_code or "", "html.parser").get_text(" ", strip=True).lower()
         return (
             ("проблем" in text and "ip" in text)
+            or "доступ ограничен" in text
+            or "доступ с вашего ip" in text
+            or ("ваш ip" in text and "огранич" in text)
             or "captcha" in text
+            or "капч" in text
+            or "подозрительную активность" in text
+            or "подтвердите, что вы не робот" in text
             or "докажите" in text
             or "проверка" in text and "безопас" in text
+            or "too many requests" in text
         )
 
     def _refresh_manual_session(self, url: str) -> bool:
@@ -290,6 +309,7 @@ class AvitoParse:
                 if self.channel_manager.api_client:
                     if catalog:
                         logger.error(f"HTML содержит catalog, но парсер не смог извлечь объявления: {err}")
+                        self.last_failure_reason = "CATALOG_SCHEMA_MISMATCH"
                         return []
                     logger.error(f"Не удалось извлечь объявления из HTML Avito: {err}")
                     self.last_failure_reason = "NO_ADS_EXTRACTED"
