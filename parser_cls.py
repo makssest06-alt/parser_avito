@@ -113,6 +113,7 @@ class AvitoParse:
             impersonate = None
 
         try:
+            used_cookies = bool(cookies)
             if channel and self.channel_manager.should_warmup(channel):
                 logger.info(f"Канал #{channel.id}: прогрев через главную Avito перед рабочим запросом.")
                 warmup_result = self.http_client.get_response(
@@ -130,6 +131,7 @@ class AvitoParse:
                 cookies = channel.cookies
                 user_agent = channel.user_agent
                 impersonate = channel.impersonate
+                used_cookies = bool(cookies)
                 time.sleep(random.uniform(2.0, 5.0))
 
             result = self.http_client.get_response(
@@ -157,7 +159,17 @@ class AvitoParse:
             logger.warning(f"Блокировка Avito: {reason}")
 
             if channel:
-                self.channel_manager.update_cookies(channel, e.response_cookies)
+                if used_cookies:
+                    self.channel_manager.clear_cookies(channel, reason)
+                    clean_channel = self.channel_manager.get_channel(channel.id) or channel
+                    if block_retries > 0:
+                        no_cookie_html = self._try_fetch_without_cookies(clean_channel, url)
+                        if no_cookie_html is not None:
+                            logger.info("Stored cookies caused block, same channel works without cookies.")
+                            self.channel_manager.mark_success(clean_channel)
+                            return no_cookie_html
+                    channel = clean_channel
+
                 if block_retries > 0 and self.channel_manager.handle_block(channel, reason):
                     logger.info("Канал обработал блокировку. Повторяем запрос...")
                     return self.fetch_data(url, block_retries=block_retries - 1)
@@ -200,6 +212,23 @@ class AvitoParse:
         except Exception as e:
             self.bad_request_count += 1
             logger.error(f"Ошибка fetch_data: {e}")
+            return None
+
+    def _try_fetch_without_cookies(self, channel: ParserChannel, url: str) -> str | None:
+        try:
+            result = self.http_client.get_response(
+                url=url,
+                proxy=channel.formatted_proxy,
+                cookies=None,
+                user_agent=None,
+                impersonate=channel.impersonate,
+                referer="https://www.avito.ru/",
+                retries=1,
+                timeout=20,
+            )
+            return result.text
+        except (BlockError, ProxyError, FetchError) as err:
+            logger.warning(f"No-cookie retry for channel #{channel.id} failed: {err}")
             return None
 
     @staticmethod

@@ -30,6 +30,7 @@ class ParserChannel:
     proxy_string: str
     formatted_proxy: str
     cookies: dict | None
+    cookie_status: str
     user_agent: str | None
     impersonate: str | None
     spfa_id: int | None
@@ -58,6 +59,7 @@ class ChannelManager:
     MOBILE_IP_CHANGE_COOLDOWN_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_COOLDOWN_SECONDS", "120"))
     MOBILE_IP_CHANGE_WAIT_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_WAIT_SECONDS", "20"))
     WARMUP_TTL_SECONDS = int(os.getenv("CHANNEL_WARMUP_TTL_SECONDS", "1800"))
+    SPFA_COOKIE_MAX_AGE_SECONDS = int(os.getenv("SPFA_COOKIE_MAX_AGE_SECONDS", "43200"))
     IMPERSONATE_LIST = ["chrome136", "chrome131", "chrome124", "chrome120", "edge"]
 
     def __init__(self, db_name: str = "users.db"):
@@ -68,6 +70,7 @@ class ChannelManager:
         self.api_client = SpfaApiClient(token) if token else None
         self._add_env_proxy()
         self._ensure_channels_for_active_proxies()
+        self._clear_expired_cookies_for_all_channels()
         self._sync_channel_status_for_proxy_activity()
 
     def acquire_channel(self) -> Optional[ParserChannel]:
@@ -77,7 +80,7 @@ class ChannelManager:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
+                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.cookie_status, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
                        pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
@@ -98,6 +101,9 @@ class ChannelManager:
             return None
 
         channel = self._row_to_channel(row)
+        if self._clear_expired_spfa_cookies(channel):
+            channel = self.get_channel(channel.id)
+
         desired_impersonate = self._impersonate_for_user_agent(channel.user_agent)
         if desired_impersonate and desired_impersonate != channel.impersonate:
             self.assign_impersonate(channel, desired_impersonate)
@@ -109,12 +115,6 @@ class ChannelManager:
         if self._unblock_before_reuse(channel):
             channel = self.get_channel(channel.id)
 
-        if not channel.cookies and self.api_client:
-            if not self.refresh_cookies(channel):
-                self.cooldown_channel(channel, "Не удалось получить cookies", minutes=10)
-                return self.acquire_channel()
-            channel = self.get_channel(channel.id)
-
         if channel:
             self._touch_channel(channel.id)
         return channel
@@ -123,7 +123,7 @@ class ChannelManager:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
+                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.cookie_status, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
                        pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
@@ -184,6 +184,36 @@ class ChannelManager:
             ''', (time.time(), channel.id))
             conn.commit()
 
+    def clear_cookies(self, channel: ParserChannel, reason: str):
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE parser_channels
+                SET spfa_id = NULL,
+                    cookies_json = NULL,
+                    user_agent = NULL,
+                    cookie_status = 'poisoned',
+                    cookie_error = ?,
+                    last_purchase_at = NULL,
+                    last_cookie_clear_at = ?,
+                    last_warmup_at = 0,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (reason, time.time(), channel.id))
+            conn.commit()
+        logger.warning(f"Канал #{channel.id}: cookies очищены: {reason}")
+
+    def _clear_expired_spfa_cookies(self, channel: ParserChannel) -> bool:
+        if not channel.spfa_id or not channel.cookies:
+            return False
+        if not channel.last_purchase_at:
+            self.clear_cookies(channel, "Legacy SPFA cookies without purchase timestamp")
+            return True
+        age = time.time() - channel.last_purchase_at
+        if age > self.SPFA_COOKIE_MAX_AGE_SECONDS:
+            self.clear_cookies(channel, f"SPFA cookies expired: age {int(age)}s")
+            return True
+        return False
+
     def assign_impersonate(self, channel: ParserChannel, impersonate: str | None = None):
         impersonate = impersonate or random.choice(self.IMPERSONATE_LIST)
         with sqlite3.connect(self.db_name) as conn:
@@ -230,6 +260,9 @@ class ChannelManager:
                     self._start_unblock(channel)
                 return True
 
+        if not channel.cookies and self.api_client and ("403" in reason or "429" in reason):
+            return self.refresh_cookies(channel)
+
         if "429" in reason:
             return self.handle_rate_limit(channel)
 
@@ -257,6 +290,8 @@ class ChannelManager:
                     cookies_json = ?,
                     user_agent = ?,
                     impersonate = ?,
+                    cookie_status = 'spfa',
+                    cookie_error = NULL,
                     last_unblock_time = 0,
                     unblock_started_at = NULL,
                     last_purchase_at = ?,
@@ -274,9 +309,12 @@ class ChannelManager:
     def _ensure_schema(self):
         columns = {
             "impersonate": "TEXT",
+            "cookie_status": "TEXT DEFAULT 'unknown'",
+            "cookie_error": "TEXT",
             "status_history_json": "TEXT",
             "unblock_started_at": "REAL",
             "last_purchase_at": "REAL",
+            "last_cookie_clear_at": "REAL",
             "last_warmup_at": "REAL DEFAULT 0",
         }
         with sqlite3.connect(self.db_name) as conn:
@@ -293,6 +331,28 @@ class ChannelManager:
                 INSERT OR IGNORE INTO parser_channels (proxy_string)
                 SELECT proxy_string FROM mobile_proxies WHERE is_active = TRUE
             ''')
+            conn.commit()
+
+    def _clear_expired_cookies_for_all_channels(self):
+        cutoff = time.time() - self.SPFA_COOKIE_MAX_AGE_SECONDS
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.execute('''
+                UPDATE parser_channels
+                SET spfa_id = NULL,
+                    cookies_json = NULL,
+                    user_agent = NULL,
+                    cookie_status = 'expired',
+                    cookie_error = 'SPFA cookies expired or missing purchase timestamp',
+                    last_purchase_at = NULL,
+                    last_cookie_clear_at = ?,
+                    last_warmup_at = 0,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE spfa_id IS NOT NULL
+                  AND cookies_json IS NOT NULL
+                  AND (last_purchase_at IS NULL OR last_purchase_at <= ?)
+            ''', (time.time(), cutoff))
+            if cursor.rowcount:
+                logger.warning(f"Очищены просроченные SPFA cookies в {cursor.rowcount} channel(s).")
             conn.commit()
 
     def _sync_channel_status_for_proxy_activity(self):
@@ -328,9 +388,9 @@ class ChannelManager:
                 logger.warning(f"Канал #{row[0]}: не удалось прочитать cookies_json.")
 
         status_history = []
-        if row[9]:
+        if row[10]:
             try:
-                status_history = json.loads(row[9])
+                status_history = json.loads(row[10])
             except json.JSONDecodeError:
                 status_history = []
 
@@ -340,19 +400,20 @@ class ChannelManager:
             formatted_proxy=self._format_proxy(row[1]),
             spfa_id=row[2],
             cookies=cookies,
-            user_agent=row[4],
-            last_warmup_at=row[12] or 0,
-            impersonate=row[13],
-            fail_count=row[5] or 0,
-            success_count=row[6] or 0,
-            last_unblock_time=row[7] or 0,
-            last_error=row[8],
+            cookie_status=row[4] or "unknown",
+            user_agent=row[5],
+            last_warmup_at=row[13] or 0,
+            impersonate=row[14],
+            fail_count=row[6] or 0,
+            success_count=row[7] or 0,
+            last_unblock_time=row[8] or 0,
+            last_error=row[9],
             status_history=status_history,
-            unblock_started_at=row[10],
-            last_purchase_at=row[11],
-            proxy_type=row[14] or "server",
-            change_ip_url=row[15] or "",
-            last_ip_change=row[16] or 0,
+            unblock_started_at=row[11],
+            last_purchase_at=row[12],
+            proxy_type=row[15] or "server",
+            change_ip_url=row[16] or "",
+            last_ip_change=row[17] or 0,
         )
 
     def _change_mobile_ip(self, channel: ParserChannel, reason: str) -> bool:

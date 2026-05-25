@@ -127,6 +127,8 @@ class Database:
                     proxy_string TEXT UNIQUE,
                     spfa_id INTEGER,
                     cookies_json TEXT,
+                    cookie_status TEXT DEFAULT 'unknown',
+                    cookie_error TEXT,
                     user_agent TEXT,
                     impersonate TEXT,
                     status TEXT DEFAULT 'ready',
@@ -138,6 +140,7 @@ class Database:
                     last_unblock_time REAL DEFAULT 0,
                     unblock_started_at REAL,
                     last_purchase_at REAL,
+                    last_cookie_clear_at REAL,
                     last_warmup_at REAL DEFAULT 0,
                     last_used TIMESTAMP,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -146,9 +149,12 @@ class Database:
             ''')
             self._ensure_columns(cursor, 'parser_channels', {
                 'impersonate': 'TEXT',
+                'cookie_status': "TEXT DEFAULT 'unknown'",
+                'cookie_error': 'TEXT',
                 'status_history_json': 'TEXT',
                 'unblock_started_at': 'REAL',
                 'last_purchase_at': 'REAL',
+                'last_cookie_clear_at': 'REAL',
                 'last_warmup_at': 'REAL DEFAULT 0',
             })
             conn.commit()
@@ -434,12 +440,36 @@ class Database:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.impersonate, pc.status, pc.cooldown_until,
                        pc.success_count, pc.fail_count, pc.last_error, pc.updated_date,
                        COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
-                       COALESCE(mp.last_ip_change, 0), COALESCE(mp.ip_change_count, 0)
+                       COALESCE(mp.last_ip_change, 0), COALESCE(mp.ip_change_count, 0),
+                       COALESCE(pc.cookie_status, 'unknown'), pc.last_purchase_at, pc.last_warmup_at
                 FROM parser_channels pc
                 LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 ORDER BY pc.id
             ''')
             return cursor.fetchall()
+
+    def clear_parser_channel_cookies(self, channel_id: int, reason: str = 'Cookies cleared'):
+        """Очищает cookies/SPFA привязку channel без отключения proxy."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM parser_channels WHERE id = ?', (channel_id,))
+            if not cursor.fetchone():
+                raise ValueError(f"Parser channel #{channel_id} не найден")
+
+            cursor.execute('''
+                UPDATE parser_channels
+                SET spfa_id = NULL,
+                    cookies_json = NULL,
+                    user_agent = NULL,
+                    cookie_status = 'cleared',
+                    cookie_error = ?,
+                    last_purchase_at = NULL,
+                    last_cookie_clear_at = strftime('%s','now'),
+                    last_warmup_at = 0,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (reason, channel_id))
+            conn.commit()
 
     def mark_mobile_ip_changed(self, proxy_string: str, changed_at: float):
         """Фиксирует успешную смену IP для mobile proxy."""

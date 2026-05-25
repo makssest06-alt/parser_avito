@@ -15,6 +15,7 @@ class SpfaApiClient:
         if full_format is None:
             full_format = os.getenv("SPFA_FULL_COOKIES", "false").strip().lower() in {"1", "true", "yes", "on"}
         self.full_format = full_format
+        self.min_balance = float(os.getenv("SPFA_MIN_BALANCE_RUB", "5"))
         
     def get_balance(self) -> float:
         """Получает текущий баланс в рублях."""
@@ -38,6 +39,15 @@ class SpfaApiClient:
         Возвращает кортеж (id, cookies_dict, user_agent).
         """
         try:
+            balance = self.get_balance()
+            if balance < 0:
+                logger.error("SPFA: не удалось проверить баланс перед покупкой cookies.")
+                return None, None, None
+            if balance < self.min_balance:
+                logger.error(f"SPFA: баланс {balance:.2f} руб. ниже порога {self.min_balance:.2f}, cookies не покупаем.")
+                return None, None, None
+            logger.info(f"SPFA: баланс перед покупкой cookies {balance:.2f} руб.")
+
             response = requests.post(
                 f"{self.BASE_URL}/cookies/", 
                 json={"api_key": self.token, "full_format": self.full_format},

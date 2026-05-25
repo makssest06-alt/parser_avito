@@ -239,11 +239,12 @@ def channels_status_command(message):
 
         status_text = "📊 *Parser channels:*\n\n"
         for channel in channels:
-            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date, proxy_type, change_ip_url, last_ip_change, ip_change_count = channel
+            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date, proxy_type, change_ip_url, last_ip_change, ip_change_count, cookie_status, last_purchase_at, last_warmup_at = channel
             proxy_masked = _mask_proxy_for_display(proxy_string)
             status_text += (
                 f"#{channel_id} `{proxy_masked}`\n"
                 f"Тип: `{proxy_type or 'server'}` | Статус: `{status}` | SPFA ID: `{spfa_id or '-'}` | TLS: `{impersonate or '-'}`\n"
+                f"Cookies: `{cookie_status or 'unknown'}` | Куплены: `{_format_unix_ts(last_purchase_at)}` | Прогрев: `{_format_unix_ts(last_warmup_at)}`\n"
                 f"Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
             )
             if proxy_type == 'mobile':
@@ -266,6 +267,14 @@ def _mask_proxy_for_display(proxy_string: str) -> str:
         return f"***@{host}"
     login, _password = credentials.split(':', 1)
     return f"{login}:***@{host}"
+
+def _format_unix_ts(value) -> str:
+    if not value:
+        return '-'
+    try:
+        return datetime.fromtimestamp(float(value)).strftime('%Y-%m-%d %H:%M')
+    except (TypeError, ValueError, OSError):
+        return '-'
 
 @bot.message_handler(commands=['reset_channel'])
 def reset_channel_command(message):
@@ -302,6 +311,55 @@ def disable_channel_command(message):
         bot.reply_to(message, "❌ Использование: /disable_channel <id> [причина]")
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка отключения channel: {str(e)}")
+
+@bot.message_handler(commands=['clear_channel_cookies'])
+def clear_channel_cookies_command(message):
+    """Очищает cookies channel без отключения proxy (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=2)
+        channel_id = int(parts[1])
+        reason = parts[2] if len(parts) > 2 else "Cleared by admin"
+        db.clear_parser_channel_cookies(channel_id, reason)
+        bot.reply_to(message, f"✅ Cookies channel #{channel_id} очищены, proxy остался активным.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /clear_channel_cookies <id> [причина]")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка очистки cookies: {str(e)}")
+
+@bot.message_handler(commands=['refresh_channel_cookies'])
+def refresh_channel_cookies_command(message):
+    """Покупает новые SPFA cookies для channel после проверки баланса."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        channel_id = int(message.text.split(maxsplit=1)[1])
+        from parser.channels.manager import ChannelManager
+
+        manager = ChannelManager()
+        channel = manager.get_channel(channel_id)
+        if not channel:
+            bot.reply_to(message, f"❌ Channel #{channel_id} не найден.")
+            return
+
+        manager.clear_cookies(channel, "Manual refresh requested")
+        channel = manager.get_channel(channel_id)
+        if manager.refresh_cookies(channel):
+            channel = manager.get_channel(channel_id)
+            bot.reply_to(message, f"✅ Cookies обновлены. Channel #{channel.id}, SPFA ID: {channel.spfa_id}, TLS: {channel.impersonate}")
+        else:
+            bot.reply_to(message, "❌ Cookies не куплены. Проверьте SPFA_TOKEN/баланс/логи.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /refresh_channel_cookies <id>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка обновления cookies: {str(e)}")
 
 @bot.message_handler(commands=['test_channel'])
 def test_channel_command(message):
@@ -347,8 +405,9 @@ def _run_channel_diagnostic(channel_id: int) -> str:
 
     lines = [
         f"Channel #{channel.id}: {_mask_proxy_for_display(channel.proxy_string)}",
-        f"Type: {channel.proxy_type} | TLS: {channel.impersonate or '-'} | SPFA: {channel.spfa_id or '-'}",
+        f"Type: {channel.proxy_type} | TLS: {channel.impersonate or '-'} | SPFA: {channel.spfa_id or '-'} | Cookies: {channel.cookie_status}",
     ]
+    results = {}
 
     for name, url, cookies in checks:
         try:
@@ -358,17 +417,38 @@ def _run_channel_diagnostic(channel_id: int) -> str:
                 cookies=cookies,
                 user_agent=channel.user_agent,
                 impersonate=channel.impersonate or "chrome136",
+                referer="https://www.avito.ru/" if "category" in name else None,
                 retries=1,
                 timeout=20,
             )
             marker = "catalog" if "catalog" in result.text else "no_catalog"
+            results[name] = ("ok", result.status_code, marker)
             lines.append(f"{name}: OK {result.status_code}, len={len(result.text)}, {marker}")
         except BlockError as err:
+            results[name] = ("block", err.status_code, str(err))
             lines.append(f"{name}: BLOCK {err.status_code or '-'} {str(err)[:120]}")
         except (ProxyError, FetchError) as err:
+            results[name] = ("error", None, str(err))
             lines.append(f"{name}: ERROR {str(err)[:120]}")
 
+    diagnosis = _diagnose_channel_results(results)
+    if diagnosis:
+        lines.append(f"Diagnosis: {diagnosis}")
+
     return "\n".join(lines)
+
+def _diagnose_channel_results(results: dict) -> str:
+    no_cookie = results.get("avito_category_no_cookies")
+    with_cookie = results.get("avito_category_with_cookies")
+    if no_cookie and no_cookie[0] == "ok" and no_cookie[2] == "catalog":
+        if with_cookie and with_cookie[0] == "block":
+            return "cookies_bad_proxy_ok"
+        if with_cookie and with_cookie[0] == "ok":
+            return "cookies_ok_proxy_ok"
+        return "no_cookies_ok"
+    if no_cookie and no_cookie[0] == "block":
+        return "proxy_or_ip_blocked_without_cookies"
+    return "unknown"
 
 def _get_or_create_parser_settings(user_id: int) -> dict:
     settings = db.get_parser_settings(user_id)
