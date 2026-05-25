@@ -408,6 +408,56 @@ class Database:
             ''')
             return cursor.fetchall()
 
+    def reset_parser_channel(self, channel_id: int):
+        """Сбрасывает cooldown и ошибки parser channel, а связанный proxy делает активным."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT proxy_string FROM parser_channels WHERE id = ?', (channel_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Parser channel #{channel_id} не найден")
+
+            proxy_string = row[0]
+            cursor.execute('''
+                UPDATE mobile_proxies
+                SET is_active = TRUE, last_fail_reason = NULL
+                WHERE proxy_string = ?
+            ''', (proxy_string,))
+            cursor.execute('''
+                UPDATE parser_channels
+                SET status = 'ready',
+                    cooldown_until = NULL,
+                    fail_count = 0,
+                    last_error = NULL,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (channel_id,))
+            conn.commit()
+
+    def disable_parser_channel(self, channel_id: int, reason: str = 'Disabled by admin'):
+        """Отключает parser channel и связанный proxy."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT proxy_string FROM parser_channels WHERE id = ?', (channel_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Parser channel #{channel_id} не найден")
+
+            proxy_string = row[0]
+            cursor.execute('''
+                UPDATE mobile_proxies
+                SET is_active = FALSE, last_fail_reason = ?
+                WHERE proxy_string = ?
+            ''', (reason, proxy_string))
+            cursor.execute('''
+                UPDATE parser_channels
+                SET status = 'disabled',
+                    last_error = ?,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (reason, channel_id))
+            conn.commit()
+
     def get_all_users(self) -> List[Tuple]:
         """Получает всех пользователей для администратора."""
         with sqlite3.connect(self.db_name) as conn:

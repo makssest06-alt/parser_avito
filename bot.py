@@ -231,6 +231,42 @@ def _mask_proxy_for_display(proxy_string: str) -> str:
     login, _password = credentials.split(':', 1)
     return f"{login}:***@{host}"
 
+@bot.message_handler(commands=['reset_channel'])
+def reset_channel_command(message):
+    """Сбрасывает cooldown канала по ID (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        channel_id = int(message.text.split(maxsplit=1)[1])
+        db.reset_parser_channel(channel_id)
+        bot.reply_to(message, f"✅ Channel #{channel_id} сброшен и активирован.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /reset_channel <id>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка сброса channel: {str(e)}")
+
+@bot.message_handler(commands=['disable_channel'])
+def disable_channel_command(message):
+    """Отключает канал по ID (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=2)
+        channel_id = int(parts[1])
+        reason = parts[2] if len(parts) > 2 else "Disabled by admin"
+        db.disable_parser_channel(channel_id, reason)
+        bot.reply_to(message, f"✅ Channel #{channel_id} отключен.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /disable_channel <id> [причина]")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка отключения channel: {str(e)}")
+
 def _get_or_create_parser_settings(user_id: int) -> dict:
     settings = db.get_parser_settings(user_id)
     if settings:
