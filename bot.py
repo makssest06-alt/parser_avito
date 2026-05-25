@@ -98,14 +98,37 @@ def get_user_id(message):
 def admin_command(message):
     user_id = message.from_user.id
     if user_id in ADMIN_IDS:
-        bot.reply_to(message, "Это команда только для администраторов!")
+        bot.reply_to(message, _admin_help_text())
     else:
         bot.reply_to(message, "У вас нет прав для выполнения этой команды.")
 
 # Обработчик команды /help
 @bot.message_handler(commands=['help'])
 def help_command(message):
-    bot.reply_to(message, "Это помощь для всех пользователей!")
+    if message.from_user.id in ADMIN_IDS:
+        bot.reply_to(message, _admin_help_text())
+    else:
+        bot.reply_to(message, "Команды: /start, /get_id. Остальное доступно через кнопки меню.")
+
+def _admin_help_text() -> str:
+    return (
+        "Admin commands\n\n"
+        "/health - parser health\n"
+        "/channels_status - список channels\n"
+        "/proxy_status - список proxy с ID\n"
+        "/spfa_balance - баланс SPFA\n"
+        "/add_proxy <proxy> - добавить server proxy\n"
+        "/add_mobile_proxy <proxy> <change_ip_url> - добавить mobile proxy\n"
+        "/test_channel <id> - диагностика channel\n"
+        "/reset_channel <id> - сбросить cooldown и счетчики ошибок\n"
+        "/enable_channel <id> - включить channel\n"
+        "/disable_channel <id> [reason] - отключить channel\n"
+        "/delete_channel <id> - удалить channel и proxy\n"
+        "/enable_proxy <id|proxy> - включить proxy\n"
+        "/delete_proxy <id|proxy> - удалить proxy и channel\n"
+        "/clear_channel_cookies <id> [reason] - очистить cookies\n"
+        "/refresh_channel_cookies <id> - купить новые cookies"
+    )
 
 # Обработчик текстовых сообщений (кнопки)
 @bot.message_handler(commands=['add_proxy'])
@@ -201,11 +224,11 @@ def proxy_status_command(message):
         status_text = "📊 *Статус прокси:*\n\n"
         
         for proxy in proxies:
-            proxy_string, is_active, success_count, fail_count, last_fail_reason, proxy_type, change_ip_url, last_ip_change, ip_change_count = proxy
+            proxy_id, proxy_string, is_active, success_count, fail_count, last_fail_reason, proxy_type, change_ip_url, last_ip_change, ip_change_count = proxy
             proxy_masked = _mask_proxy_for_display(proxy_string)
             status = "✅ Активен" if is_active else "❌ Отключен"
             status_text += (
-                f"• `{proxy_masked}`\n"
+                f"#{proxy_id} `{proxy_masked}`\n"
                 f"  Тип: `{proxy_type or 'server'}` | Статус: {status}\n"
                 f"  Успешно: {success_count}, Ошибок: {fail_count}\n"
                 f"  Change IP: {'есть' if change_ip_url else '-'} | Смен IP: {ip_change_count or 0}\n"
@@ -390,6 +413,74 @@ def disable_channel_command(message):
         bot.reply_to(message, "❌ Использование: /disable_channel <id> [причина]")
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка отключения channel: {str(e)}")
+
+@bot.message_handler(commands=['enable_channel'])
+def enable_channel_command(message):
+    """Включает канал по ID (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        channel_id = int(message.text.split(maxsplit=1)[1])
+        db.enable_parser_channel(channel_id)
+        bot.reply_to(message, f"✅ Channel #{channel_id} включен.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /enable_channel <id>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка включения channel: {str(e)}")
+
+@bot.message_handler(commands=['delete_channel'])
+def delete_channel_command(message):
+    """Удаляет channel и связанный proxy по ID (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        channel_id = int(message.text.split(maxsplit=1)[1])
+        db.delete_parser_channel(channel_id, delete_proxy=True)
+        bot.reply_to(message, f"✅ Channel #{channel_id} и связанный proxy удалены.")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /delete_channel <id>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка удаления channel: {str(e)}")
+
+@bot.message_handler(commands=['enable_proxy'])
+def enable_proxy_command(message):
+    """Включает proxy по ID из /proxy_status или полной строке."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        proxy_identifier = message.text.split(maxsplit=1)[1].strip()
+        db.enable_proxy(proxy_identifier)
+        bot.reply_to(message, f"✅ Proxy {proxy_identifier} включен.")
+    except IndexError:
+        bot.reply_to(message, "❌ Использование: /enable_proxy <id|proxy>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка включения proxy: {str(e)}")
+
+@bot.message_handler(commands=['delete_proxy'])
+def delete_proxy_command(message):
+    """Удаляет proxy по ID из /proxy_status или полной строке."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        proxy_identifier = message.text.split(maxsplit=1)[1].strip()
+        db.delete_proxy(proxy_identifier)
+        bot.reply_to(message, f"✅ Proxy {proxy_identifier} и связанный channel удалены.")
+    except IndexError:
+        bot.reply_to(message, "❌ Использование: /delete_proxy <id|proxy>")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка удаления proxy: {str(e)}")
 
 @bot.message_handler(commands=['clear_channel_cookies'])
 def clear_channel_cookies_command(message):

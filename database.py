@@ -427,12 +427,59 @@ class Database:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT proxy_string, is_active, success_count, fail_count, last_fail_reason,
+                SELECT id, proxy_string, is_active, success_count, fail_count, last_fail_reason,
                        proxy_type, change_ip_url, last_ip_change, ip_change_count
                 FROM mobile_proxies
                 ORDER BY created_date
             ''')
             return cursor.fetchall()
+
+    def enable_proxy(self, proxy_identifier: str):
+        """Активирует proxy по ID или полной строке и сбрасывает статус channel."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            proxy_string = self._get_proxy_string(cursor, proxy_identifier)
+            if not proxy_string:
+                raise ValueError(f"Proxy `{proxy_identifier}` не найден")
+
+            cursor.execute('''
+                UPDATE mobile_proxies
+                SET is_active = TRUE,
+                    last_fail_reason = NULL
+                WHERE proxy_string = ?
+            ''', (proxy_string,))
+            cursor.execute('''
+                UPDATE parser_channels
+                SET status = 'ready',
+                    cooldown_until = NULL,
+                    next_available_at = NULL,
+                    last_error = NULL,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE proxy_string = ?
+            ''', (proxy_string,))
+            conn.commit()
+
+    def delete_proxy(self, proxy_identifier: str):
+        """Удаляет proxy по ID или полной строке вместе с parser channel."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            proxy_string = self._get_proxy_string(cursor, proxy_identifier)
+            if not proxy_string:
+                raise ValueError(f"Proxy `{proxy_identifier}` не найден")
+
+            cursor.execute('DELETE FROM parser_channels WHERE proxy_string = ?', (proxy_string,))
+            cursor.execute('DELETE FROM mobile_proxies WHERE proxy_string = ?', (proxy_string,))
+            conn.commit()
+
+    @staticmethod
+    def _get_proxy_string(cursor, proxy_identifier: str) -> str | None:
+        identifier = str(proxy_identifier).strip()
+        if identifier.isdigit():
+            cursor.execute('SELECT proxy_string FROM mobile_proxies WHERE id = ?', (int(identifier),))
+        else:
+            cursor.execute('SELECT proxy_string FROM mobile_proxies WHERE proxy_string = ?', (identifier,))
+        row = cursor.fetchone()
+        return row[0] if row else None
 
     def get_all_parser_channels(self) -> List[Tuple]:
         """Получает все parser channels для диагностики."""
@@ -535,6 +582,48 @@ class Database:
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (reason, channel_id))
+            conn.commit()
+
+    def enable_parser_channel(self, channel_id: int):
+        """Включает parser channel и связанный proxy без удаления статистики."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT proxy_string FROM parser_channels WHERE id = ?', (channel_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Parser channel #{channel_id} не найден")
+
+            proxy_string = row[0]
+            cursor.execute('''
+                UPDATE mobile_proxies
+                SET is_active = TRUE,
+                    last_fail_reason = NULL
+                WHERE proxy_string = ?
+            ''', (proxy_string,))
+            cursor.execute('''
+                UPDATE parser_channels
+                SET status = 'ready',
+                    cooldown_until = NULL,
+                    next_available_at = NULL,
+                    last_error = NULL,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (channel_id,))
+            conn.commit()
+
+    def delete_parser_channel(self, channel_id: int, delete_proxy: bool = True):
+        """Удаляет parser channel; по умолчанию удаляет и связанный proxy."""
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT proxy_string FROM parser_channels WHERE id = ?', (channel_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError(f"Parser channel #{channel_id} не найден")
+
+            proxy_string = row[0]
+            cursor.execute('DELETE FROM parser_channels WHERE id = ?', (channel_id,))
+            if delete_proxy:
+                cursor.execute('DELETE FROM mobile_proxies WHERE proxy_string = ?', (proxy_string,))
             conn.commit()
 
     def get_all_users(self) -> List[Tuple]:
