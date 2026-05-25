@@ -2,6 +2,7 @@ import threading
 import time
 import json
 import sqlite3
+import os
 from datetime import datetime
 from database import Database
 from dto import AvitoConfig
@@ -29,6 +30,7 @@ class ParserService:
         self.thread = None
         self.bot = None  # Будет установлен позже
         self.last_admin_alert = 0
+        self.last_balance_alert = 0
 
     def start_monitoring(self):
         """Запускает мониторинг в фоновом режиме"""
@@ -58,6 +60,7 @@ class ParserService:
         """Основной цикл мониторинга (Queue & Deduplication)"""
         while self.is_running and not self.stop_event.is_set():
             try:
+                self._notify_admin_low_spfa_balance()
                 links_with_users = self.db.get_all_active_links_with_users()
                 
                 if not links_with_users:
@@ -168,15 +171,56 @@ class ParserService:
             return
 
         self.last_admin_alert = now
+        health_text = ""
+        try:
+            from parser.channels.manager import ChannelManager
+            health = ChannelManager().get_health_summary()
+            health_text = (
+                f" Available: {health['available']}, cooldown: {health['cooldown']}, "
+                f"rate-limited: {health['waiting_rate_limit']}, disabled: {health['disabled']}."
+            )
+        except Exception as err:
+            logger.debug(f"Не удалось получить parser health для alert: {err}")
+
         message = (
             "Avito parser: все parser channels недоступны. "
-            "Прокси в cooldown или пул пуст. Нужен новый прокси/IP или ожидание cooldown."
+            "Прокси в cooldown/rate-limit или пул пуст. Нужен новый прокси/IP или ожидание cooldown."
+            f"{health_text}"
         )
         for admin_id in ADMIN_IDS:
             try:
                 self.bot.send_message(admin_id, message)
             except Exception as err:
                 logger.error(f"Не удалось отправить admin alert: {sanitize_error(err)}")
+
+    def _notify_admin_low_spfa_balance(self):
+        if not self.bot or not ADMIN_IDS:
+            return
+        now = time.time()
+        if now - self.last_balance_alert < 1800:
+            return
+
+        try:
+            from parser.channels.manager import ChannelManager
+            manager = ChannelManager()
+            if not manager.api_client:
+                return
+            balance = manager.api_client.get_balance()
+            min_balance = float(os.getenv("SPFA_MIN_BALANCE_RUB", "5"))
+        except Exception as err:
+            logger.debug(f"Не удалось проверить SPFA balance для alert: {err}")
+            return
+
+        if balance < 0 or balance >= min_balance:
+            return
+
+        self.last_balance_alert = now
+        message = f"Avito parser: низкий SPFA balance {balance:.2f} руб. Минимум: {min_balance:.2f} руб."
+        for admin_id in ADMIN_IDS:
+            try:
+                self.bot.send_message(admin_id, message)
+            except Exception as err:
+                logger.error(f"Не удалось отправить SPFA balance alert: {sanitize_error(err)}")
 
 class UserTgHandler:
     """Обработчик для отправки уведомлений пользователю через бота"""

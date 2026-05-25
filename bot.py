@@ -1,4 +1,5 @@
 import logging
+import json
 import telebot
 import sqlite3
 from datetime import datetime
@@ -239,14 +240,17 @@ def channels_status_command(message):
 
         status_text = "📊 *Parser channels:*\n\n"
         for channel in channels:
-            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date, proxy_type, change_ip_url, last_ip_change, ip_change_count, cookie_status, last_purchase_at, last_warmup_at = channel
+            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date, proxy_type, change_ip_url, last_ip_change, ip_change_count, cookie_status, last_purchase_at, last_warmup_at, next_available_at, status_history_json = channel
             proxy_masked = _mask_proxy_for_display(proxy_string)
+            health_score = _channel_health_score(status_history_json, success_count, fail_count)
             status_text += (
                 f"#{channel_id} `{proxy_masked}`\n"
                 f"Тип: `{proxy_type or 'server'}` | Статус: `{status}` | SPFA ID: `{spfa_id or '-'}` | TLS: `{impersonate or '-'}`\n"
                 f"Cookies: `{cookie_status or 'unknown'}` | Куплены: `{_format_unix_ts(last_purchase_at)}` | Прогрев: `{_format_unix_ts(last_warmup_at)}`\n"
-                f"Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
+                f"Health: `{health_score}` | Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
             )
+            if next_available_at:
+                status_text += f"Next request: `{_format_iso_ts(next_available_at)}`\n"
             if proxy_type == 'mobile':
                 status_text += f"Change IP: `{'есть' if change_ip_url else '-'}` | Смен IP: `{ip_change_count or 0}`\n"
             if cooldown_until:
@@ -275,6 +279,81 @@ def _format_unix_ts(value) -> str:
         return datetime.fromtimestamp(float(value)).strftime('%Y-%m-%d %H:%M')
     except (TypeError, ValueError, OSError):
         return '-'
+
+def _format_iso_ts(value) -> str:
+    if not value:
+        return '-'
+    try:
+        return datetime.fromisoformat(str(value)).strftime('%Y-%m-%d %H:%M:%S')
+    except (TypeError, ValueError):
+        return str(value)[:19]
+
+def _channel_health_score(status_history_json: str | None, success_count: int, fail_count: int) -> int:
+    try:
+        history = json.loads(status_history_json or '[]')
+    except json.JSONDecodeError:
+        history = []
+    recent = history[-10:]
+    if recent:
+        good = sum(1 for code in recent if code == 200)
+        bad = len(recent) - good
+        return max(0, min(100, int((good / len(recent)) * 100 - bad * 5)))
+    total = (success_count or 0) + (fail_count or 0)
+    if not total:
+        return 50
+    return max(0, min(100, int((success_count or 0) / total * 100)))
+
+@bot.message_handler(commands=['health'])
+def health_command(message):
+    """Показывает общее здоровье parser channels (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        from parser.channels.manager import ChannelManager
+
+        manager = ChannelManager()
+        health = manager.get_health_summary()
+        cookie_statuses = ", ".join(f"{key}: {value}" for key, value in sorted(health['cookie_statuses'].items())) or "-"
+        text = (
+            "📊 *Parser health*\n\n"
+            f"Channels: `{health['total']}`\n"
+            f"Active proxy: `{health['active_proxy']}`\n"
+            f"Available now: `{health['available']}`\n"
+            f"Rate-limited: `{health['waiting_rate_limit']}`\n"
+            f"Cooldown: `{health['cooldown']}`\n"
+            f"Disabled: `{health['disabled']}`\n"
+            f"Avg health: `{health['avg_health_score']}`\n"
+            f"Cookies: `{cookie_statuses}`"
+        )
+        bot.reply_to(message, text, parse_mode='Markdown')
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка health-check: {str(e)}")
+
+@bot.message_handler(commands=['spfa_balance'])
+def spfa_balance_command(message):
+    """Показывает баланс SPFA (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    try:
+        from parser.channels.manager import ChannelManager
+
+        manager = ChannelManager()
+        if not manager.api_client:
+            bot.reply_to(message, "SPFA_TOKEN не настроен.")
+            return
+        balance = manager.api_client.get_balance()
+        if balance < 0:
+            bot.reply_to(message, "❌ Не удалось получить баланс SPFA.")
+            return
+        bot.reply_to(message, f"SPFA balance: `{balance:.2f}` руб.", parse_mode='Markdown')
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка запроса баланса: {str(e)}")
 
 @bot.message_handler(commands=['reset_channel'])
 def reset_channel_command(message):

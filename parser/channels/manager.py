@@ -42,6 +42,7 @@ class ParserChannel:
     unblock_started_at: float | None
     last_purchase_at: float | None
     last_warmup_at: float
+    next_available_at: str | None
     proxy_type: str
     change_ip_url: str
     last_ip_change: float
@@ -56,6 +57,8 @@ class ChannelManager:
     WAIT_FIRST_FOR_UNBLOCK = 5
     WAIT_FOR_UNBLOCK = 10
     MIN_CHANNEL_REUSE_SECONDS = int(os.getenv("MIN_CHANNEL_REUSE_SECONDS", "60"))
+    CHANNEL_SUCCESS_DELAY_MIN_SECONDS = int(os.getenv("CHANNEL_SUCCESS_DELAY_MIN_SECONDS", "60"))
+    CHANNEL_SUCCESS_DELAY_MAX_SECONDS = int(os.getenv("CHANNEL_SUCCESS_DELAY_MAX_SECONDS", "180"))
     MOBILE_IP_CHANGE_COOLDOWN_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_COOLDOWN_SECONDS", "120"))
     MOBILE_IP_CHANGE_WAIT_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_WAIT_SECONDS", "20"))
     WARMUP_TTL_SECONDS = int(os.getenv("CHANNEL_WARMUP_TTL_SECONDS", "1800"))
@@ -83,17 +86,19 @@ class ChannelManager:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.cookie_status, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
-                       pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       pc.last_warmup_at, pc.next_available_at, pc.impersonate,
+                       COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
                        COALESCE(mp.last_ip_change, 0)
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 WHERE mp.is_active = TRUE
                   AND pc.status != 'disabled'
                   AND (pc.cooldown_until IS NULL OR pc.cooldown_until <= ?)
+                  AND (pc.next_available_at IS NULL OR pc.next_available_at <= ?)
                   AND (pc.last_used IS NULL OR pc.last_used <= ?)
                 ORDER BY pc.fail_count ASC, pc.success_count DESC, pc.last_used IS NOT NULL, pc.last_used ASC
                 LIMIT 1
-            ''', (datetime.now().isoformat(), min_reuse_time))
+            ''', (datetime.now().isoformat(), datetime.now().isoformat(), min_reuse_time))
             row = cursor.fetchone()
 
         if not row:
@@ -126,7 +131,8 @@ class ChannelManager:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.cookie_status, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
-                       pc.last_warmup_at, pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       pc.last_warmup_at, pc.next_available_at, pc.impersonate,
+                       COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
                        COALESCE(mp.last_ip_change, 0)
                 FROM parser_channels pc
                 LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
@@ -136,6 +142,7 @@ class ChannelManager:
         return self._row_to_channel(row) if row else None
 
     def mark_success(self, channel: ParserChannel):
+        next_available_at = self._next_success_available_at()
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''
                 UPDATE parser_channels
@@ -146,10 +153,11 @@ class ChannelManager:
                     status_history_json = ?,
                     unblock_started_at = NULL,
                     cooldown_until = NULL,
+                    next_available_at = ?,
                     last_used = CURRENT_TIMESTAMP,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
-            ''', (self._status_history_json(channel, 200), channel.id))
+            ''', (self._status_history_json(channel, 200), next_available_at, channel.id))
             conn.commit()
 
     def update_cookies(self, channel: ParserChannel, response_cookies: dict):
@@ -196,6 +204,7 @@ class ChannelManager:
                     last_purchase_at = NULL,
                     last_cookie_clear_at = ?,
                     last_warmup_at = 0,
+                    next_available_at = NULL,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (reason, time.time(), channel.id))
@@ -233,12 +242,13 @@ class ChannelManager:
                 UPDATE parser_channels
                 SET status = 'cooldown',
                     cooldown_until = ?,
+                    next_available_at = ?,
                     fail_count = fail_count + 1,
                     last_error = ?,
                     status_history_json = ?,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE id = ?
-            ''', (cooldown_until.isoformat(), reason, self._status_history_json(channel, status_code), channel.id))
+            ''', (cooldown_until.isoformat(), cooldown_until.isoformat(), reason, self._status_history_json(channel, status_code), channel.id))
             conn.commit()
         logger.warning(f"Канал #{channel.id} поставлен в cooldown до {cooldown_until:%H:%M:%S}: {reason}")
 
@@ -296,6 +306,7 @@ class ChannelManager:
                     unblock_started_at = NULL,
                     last_purchase_at = ?,
                     last_warmup_at = 0,
+                    next_available_at = NULL,
                     status_history_json = '[]',
                     status = 'ready',
                     cooldown_until = NULL,
@@ -316,6 +327,7 @@ class ChannelManager:
             "last_purchase_at": "REAL",
             "last_cookie_clear_at": "REAL",
             "last_warmup_at": "REAL DEFAULT 0",
+            "next_available_at": "TIMESTAMP",
         }
         with sqlite3.connect(self.db_name) as conn:
             existing = {row[1] for row in conn.execute("PRAGMA table_info(parser_channels)").fetchall()}
@@ -346,6 +358,7 @@ class ChannelManager:
                     last_purchase_at = NULL,
                     last_cookie_clear_at = ?,
                     last_warmup_at = 0,
+                    next_available_at = NULL,
                     updated_date = CURRENT_TIMESTAMP
                 WHERE spfa_id IS NOT NULL
                   AND cookies_json IS NOT NULL
@@ -403,7 +416,8 @@ class ChannelManager:
             cookie_status=row[4] or "unknown",
             user_agent=row[5],
             last_warmup_at=row[13] or 0,
-            impersonate=row[14],
+            next_available_at=row[14],
+            impersonate=row[15],
             fail_count=row[6] or 0,
             success_count=row[7] or 0,
             last_unblock_time=row[8] or 0,
@@ -411,9 +425,9 @@ class ChannelManager:
             status_history=status_history,
             unblock_started_at=row[11],
             last_purchase_at=row[12],
-            proxy_type=row[15] or "server",
-            change_ip_url=row[16] or "",
-            last_ip_change=row[17] or 0,
+            proxy_type=row[16] or "server",
+            change_ip_url=row[17] or "",
+            last_ip_change=row[18] or 0,
         )
 
     def _change_mobile_ip(self, channel: ParserChannel, reason: str) -> bool:
@@ -517,6 +531,68 @@ class ChannelManager:
         if "401" in reason:
             return 401
         return None
+
+    def get_health_summary(self) -> dict:
+        now = datetime.now().isoformat()
+        with sqlite3.connect(self.db_name) as conn:
+            rows = conn.execute('''
+                SELECT pc.status, pc.cooldown_until, pc.next_available_at, pc.success_count,
+                       pc.fail_count, pc.status_history_json, mp.is_active, pc.cookie_status
+                FROM parser_channels pc
+                LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
+            ''').fetchall()
+
+        total = len(rows)
+        active_proxy = sum(1 for row in rows if bool(row[6]))
+        disabled = sum(1 for row in rows if row[0] == 'disabled' or not bool(row[6]))
+        cooldown = sum(1 for row in rows if row[0] == 'cooldown' and row[1] and row[1] > now)
+        waiting_rate_limit = sum(1 for row in rows if row[2] and row[2] > now)
+        available = sum(
+            1 for row in rows
+            if bool(row[6])
+            and row[0] != 'disabled'
+            and (not row[1] or row[1] <= now)
+            and (not row[2] or row[2] <= now)
+        )
+        scores = [self._health_score_from_history(row[5], row[3], row[4]) for row in rows]
+        avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+        cookie_statuses = {}
+        for row in rows:
+            status = row[7] or 'unknown'
+            cookie_statuses[status] = cookie_statuses.get(status, 0) + 1
+
+        return {
+            'total': total,
+            'active_proxy': active_proxy,
+            'available': available,
+            'cooldown': cooldown,
+            'waiting_rate_limit': waiting_rate_limit,
+            'disabled': disabled,
+            'avg_health_score': avg_score,
+            'cookie_statuses': cookie_statuses,
+        }
+
+    def _next_success_available_at(self) -> str:
+        min_delay = min(self.CHANNEL_SUCCESS_DELAY_MIN_SECONDS, self.CHANNEL_SUCCESS_DELAY_MAX_SECONDS)
+        max_delay = max(self.CHANNEL_SUCCESS_DELAY_MIN_SECONDS, self.CHANNEL_SUCCESS_DELAY_MAX_SECONDS)
+        delay = random.randint(min_delay, max_delay)
+        return (datetime.now() + timedelta(seconds=delay)).isoformat()
+
+    @staticmethod
+    def _health_score_from_history(status_history_json: str | None, success_count: int, fail_count: int) -> int:
+        try:
+            history = json.loads(status_history_json or '[]')
+        except json.JSONDecodeError:
+            history = []
+        recent = history[-10:]
+        if recent:
+            good = sum(1 for code in recent if code == 200)
+            bad = len(recent) - good
+            return max(0, min(100, int((good / len(recent)) * 100 - bad * 5)))
+        total = (success_count or 0) + (fail_count or 0)
+        if not total:
+            return 50
+        return max(0, min(100, int((success_count or 0) / total * 100)))
 
     @classmethod
     def _impersonate_for_user_agent(cls, user_agent: str | None) -> str | None:

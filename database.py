@@ -142,6 +142,7 @@ class Database:
                     last_purchase_at REAL,
                     last_cookie_clear_at REAL,
                     last_warmup_at REAL DEFAULT 0,
+                    next_available_at TIMESTAMP,
                     last_used TIMESTAMP,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -156,6 +157,7 @@ class Database:
                 'last_purchase_at': 'REAL',
                 'last_cookie_clear_at': 'REAL',
                 'last_warmup_at': 'REAL DEFAULT 0',
+                'next_available_at': 'TIMESTAMP',
             })
             conn.commit()
 
@@ -441,7 +443,8 @@ class Database:
                        pc.success_count, pc.fail_count, pc.last_error, pc.updated_date,
                        COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
                        COALESCE(mp.last_ip_change, 0), COALESCE(mp.ip_change_count, 0),
-                       COALESCE(pc.cookie_status, 'unknown'), pc.last_purchase_at, pc.last_warmup_at
+                       COALESCE(pc.cookie_status, 'unknown'), pc.last_purchase_at, pc.last_warmup_at,
+                       pc.next_available_at, pc.status_history_json
                 FROM parser_channels pc
                 LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 ORDER BY pc.id
@@ -502,6 +505,7 @@ class Database:
                 UPDATE parser_channels
                 SET status = 'ready',
                     cooldown_until = NULL,
+                    next_available_at = NULL,
                     fail_count = 0,
                     last_error = NULL,
                     updated_date = CURRENT_TIMESTAMP
