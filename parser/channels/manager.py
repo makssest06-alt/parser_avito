@@ -4,6 +4,8 @@ import os
 import random
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -37,6 +39,9 @@ class ParserChannel:
     status_history: list[int]
     unblock_started_at: float | None
     last_purchase_at: float | None
+    proxy_type: str
+    change_ip_url: str
+    last_ip_change: float
 
 
 class ChannelManager:
@@ -48,6 +53,8 @@ class ChannelManager:
     WAIT_FIRST_FOR_UNBLOCK = 5
     WAIT_FOR_UNBLOCK = 10
     MIN_CHANNEL_REUSE_SECONDS = int(os.getenv("MIN_CHANNEL_REUSE_SECONDS", "60"))
+    MOBILE_IP_CHANGE_COOLDOWN_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_COOLDOWN_SECONDS", "120"))
+    MOBILE_IP_CHANGE_WAIT_SECONDS = int(os.getenv("MOBILE_IP_CHANGE_WAIT_SECONDS", "20"))
     IMPERSONATE_LIST = ["chrome136", "chrome131", "chrome124", "chrome120", "edge"]
 
     def __init__(self, db_name: str = "users.db"):
@@ -70,7 +77,8 @@ class ChannelManager:
                 SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
                        pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
                        pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
-                       pc.impersonate
+                       pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       COALESCE(mp.last_ip_change, 0)
                 FROM parser_channels pc
                 JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
                 WHERE mp.is_active = TRUE
@@ -108,12 +116,14 @@ class ChannelManager:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, proxy_string, spfa_id, cookies_json, user_agent,
-                       fail_count, success_count, last_unblock_time, last_error,
-                       status_history_json, unblock_started_at, last_purchase_at,
-                       impersonate
-                FROM parser_channels
-                WHERE id = ?
+                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.cookies_json, pc.user_agent,
+                       pc.fail_count, pc.success_count, pc.last_unblock_time, pc.last_error,
+                       pc.status_history_json, pc.unblock_started_at, pc.last_purchase_at,
+                       pc.impersonate, COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       COALESCE(mp.last_ip_change, 0)
+                FROM parser_channels pc
+                LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
+                WHERE pc.id = ?
             ''', (channel_id,))
             row = cursor.fetchone()
         return self._row_to_channel(row) if row else None
@@ -186,6 +196,19 @@ class ChannelManager:
             return True
 
         return self.refresh_cookies(channel)
+
+    def handle_block(self, channel: ParserChannel, reason: str) -> bool:
+        """Tries cheap recovery for a blocked channel before cooldown."""
+        if channel.proxy_type == "mobile" and channel.change_ip_url:
+            if self._change_mobile_ip(channel, reason):
+                if self.api_client and channel.spfa_id:
+                    self._start_unblock(channel)
+                return True
+
+        if "429" in reason:
+            return self.handle_rate_limit(channel)
+
+        return False
 
     def refresh_cookies(self, channel: ParserChannel) -> bool:
         if not self.api_client:
@@ -297,7 +320,36 @@ class ChannelManager:
             status_history=status_history,
             unblock_started_at=row[10],
             last_purchase_at=row[11],
+            proxy_type=row[13] or "server",
+            change_ip_url=row[14] or "",
+            last_ip_change=row[15] or 0,
         )
+
+    def _change_mobile_ip(self, channel: ParserChannel, reason: str) -> bool:
+        now = time.time()
+        elapsed = now - (channel.last_ip_change or 0)
+        if elapsed < self.MOBILE_IP_CHANGE_COOLDOWN_SECONDS:
+            logger.info(
+                f"Канал #{channel.id}: смена IP запускалась недавно, прошло {int(elapsed)}с."
+            )
+            time.sleep(self.MOBILE_IP_CHANGE_WAIT_SECONDS)
+            return True
+
+        logger.warning(f"Канал #{channel.id}: mobile proxy получил блок ({reason}), меняем IP.")
+        try:
+            request = urllib.request.Request(channel.change_ip_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                status_code = response.getcode()
+                if status_code >= 400:
+                    logger.warning(f"Канал #{channel.id}: change_ip_url вернул HTTP {status_code}.")
+                    return False
+        except (urllib.error.URLError, TimeoutError, ValueError) as err:
+            logger.warning(f"Канал #{channel.id}: не удалось сменить IP mobile proxy: {err}")
+            return False
+
+        self.db.mark_mobile_ip_changed(channel.proxy_string, now)
+        time.sleep(self.MOBILE_IP_CHANGE_WAIT_SECONDS)
+        return True
 
     def _unblock_before_reuse(self, channel: ParserChannel) -> bool:
         """Runs free SPFA unblock before retrying a channel that previously hit 403."""

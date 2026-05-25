@@ -103,14 +103,24 @@ class Database:
                 CREATE TABLE IF NOT EXISTS mobile_proxies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     proxy_string TEXT UNIQUE,
+                    proxy_type TEXT DEFAULT 'server',
+                    change_ip_url TEXT DEFAULT '',
                     is_active BOOLEAN DEFAULT TRUE,
                     last_used TIMESTAMP,
+                    last_ip_change REAL DEFAULT 0,
+                    ip_change_count INTEGER DEFAULT 0,
                     success_count INTEGER DEFAULT 0,
                     fail_count INTEGER DEFAULT 0,
                     last_fail_reason TEXT,
                     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            self._ensure_columns(cursor, 'mobile_proxies', {
+                'proxy_type': "TEXT DEFAULT 'server'",
+                'change_ip_url': "TEXT DEFAULT ''",
+                'last_ip_change': 'REAL DEFAULT 0',
+                'ip_change_count': 'INTEGER DEFAULT 0',
+            })
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS parser_channels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,17 +350,20 @@ class Database:
             cursor.execute("SELECT 1 FROM viewed WHERE id = ? AND price = ?", (record_id, price))
             return cursor.fetchone() is not None
 
-    def add_mobile_proxy(self, proxy_string: str):
-        """Добавляет мобильный прокси."""
+    def add_mobile_proxy(self, proxy_string: str, proxy_type: str = 'server', change_ip_url: str = ''):
+        """Добавляет proxy в пул."""
+        proxy_type = proxy_type if proxy_type in {'server', 'mobile'} else 'server'
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO mobile_proxies (proxy_string, is_active)
-                VALUES (?, TRUE)
+                INSERT INTO mobile_proxies (proxy_string, proxy_type, change_ip_url, is_active)
+                VALUES (?, ?, ?, TRUE)
                 ON CONFLICT(proxy_string) DO UPDATE SET
+                    proxy_type = excluded.proxy_type,
+                    change_ip_url = excluded.change_ip_url,
                     is_active = TRUE,
                     last_fail_reason = NULL
-            ''', (proxy_string,))
+            ''', (proxy_string, proxy_type, change_ip_url))
             conn.commit()
 
     def get_random_active_proxy(self) -> Optional[str]:
@@ -404,7 +417,8 @@ class Database:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT proxy_string, is_active, success_count, fail_count, last_fail_reason
+                SELECT proxy_string, is_active, success_count, fail_count, last_fail_reason,
+                       proxy_type, change_ip_url, last_ip_change, ip_change_count
                 FROM mobile_proxies
                 ORDER BY created_date
             ''')
@@ -415,12 +429,27 @@ class Database:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, proxy_string, spfa_id, impersonate, status, cooldown_until,
-                       success_count, fail_count, last_error, updated_date
-                FROM parser_channels
-                ORDER BY id
+                SELECT pc.id, pc.proxy_string, pc.spfa_id, pc.impersonate, pc.status, pc.cooldown_until,
+                       pc.success_count, pc.fail_count, pc.last_error, pc.updated_date,
+                       COALESCE(mp.proxy_type, 'server'), COALESCE(mp.change_ip_url, ''),
+                       COALESCE(mp.last_ip_change, 0), COALESCE(mp.ip_change_count, 0)
+                FROM parser_channels pc
+                LEFT JOIN mobile_proxies mp ON mp.proxy_string = pc.proxy_string
+                ORDER BY pc.id
             ''')
             return cursor.fetchall()
+
+    def mark_mobile_ip_changed(self, proxy_string: str, changed_at: float):
+        """Фиксирует успешную смену IP для mobile proxy."""
+        with sqlite3.connect(self.db_name) as conn:
+            conn.execute('''
+                UPDATE mobile_proxies
+                SET last_ip_change = ?,
+                    ip_change_count = ip_change_count + 1,
+                    last_used = CURRENT_TIMESTAMP
+                WHERE proxy_string = ?
+            ''', (changed_at, proxy_string))
+            conn.commit()
 
     def reset_parser_channel(self, channel_id: int):
         """Сбрасывает cooldown и ошибки parser channel, а связанный proxy делает активным."""

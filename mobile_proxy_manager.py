@@ -51,9 +51,9 @@ class MobileProxyManager:
         logger.warning(f"Прокси {proxy_string} получил ошибку: {reason}")
         self.db.update_proxy_stats(proxy_string, success=False, fail_reason=reason)
 
-    def add_proxy(self, proxy_string: str):
-        """Добавляет новый прокси в базу"""
-        self.db.add_mobile_proxy(proxy_string)
+    def add_proxy(self, proxy_string: str, proxy_type: str = "server", change_ip_url: str = ""):
+        """Добавляет новый proxy в базу"""
+        self.db.add_mobile_proxy(proxy_string, proxy_type=proxy_type, change_ip_url=change_ip_url)
         logger.info(f"Добавлен новый прокси: {proxy_string}")
 
     def get_proxy_status(self):

@@ -138,14 +138,11 @@ class AvitoParse:
 
             if channel:
                 self.channel_manager.update_cookies(channel, e.response_cookies)
-                if "429" in reason and block_retries > 0:
-                    if self.channel_manager.handle_rate_limit(channel):
-                        logger.info("Канал обработал 429. Повторяем запрос...")
-                        return self.fetch_data(url, block_retries=block_retries - 1)
-                    self.channel_manager.cooldown_channel(channel, reason, minutes=5)
+                if block_retries > 0 and self.channel_manager.handle_block(channel, reason):
+                    logger.info("Канал обработал блокировку. Повторяем запрос...")
                     return self.fetch_data(url, block_retries=block_retries - 1)
 
-                self.channel_manager.cooldown_channel(channel, reason, minutes=15)
+                self.channel_manager.cooldown_channel(channel, reason, minutes=5 if "429" in reason else 15)
                 if block_retries > 0:
                     return self.fetch_data(url, block_retries=block_retries - 1)
                 return None

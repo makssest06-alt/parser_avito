@@ -109,7 +109,7 @@ def help_command(message):
 # Обработчик текстовых сообщений (кнопки)
 @bot.message_handler(commands=['add_proxy'])
 def add_proxy_command(message):
-    """Обработчик команды для добавления мобильного прокси (только для админов)"""
+    """Обработчик команды для добавления server proxy (только для админов)"""
     user_id = message.from_user.id
     
     if user_id not in ADMIN_IDS:
@@ -123,6 +123,7 @@ def add_proxy_command(message):
                     "❌ Использование: /add_proxy [прокси]\n\n"
                     "Формат: login:password@host:port\n"
                     "Для SOCKS можно указать схему: socks5://login:password@host:port\n\n"
+                    "Для mobile proxy используйте /add_mobile_proxy.\n\n"
                     "Пример:\n"
                     "/add_proxy login:password@proxy.example.com:12345")
         return
@@ -142,10 +143,42 @@ def add_proxy_command(message):
     
     try:
         from mobile_proxy_manager import proxy_manager
-        proxy_manager.add_proxy(proxy_string)
-        bot.reply_to(message, f"✅ Мобильный прокси успешно добавлен!")
+        proxy_manager.add_proxy(proxy_string, proxy_type="server")
+        bot.reply_to(message, "✅ Server proxy успешно добавлен!")
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка при добавлении прокси: {str(e)}")
+
+@bot.message_handler(commands=['add_mobile_proxy'])
+def add_mobile_proxy_command(message):
+    """Добавляет mobile proxy с URL смены IP (только для админов)."""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.reply_to(message, "❌ Эта команда только для администраторов!")
+        return
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.reply_to(message,
+                    "❌ Использование: /add_mobile_proxy <прокси> <change_ip_url>\n\n"
+                    "Пример:\n"
+                    "/add_mobile_proxy login:password@proxy.example.com:12345 https://provider.example/change-ip?token=xxx")
+        return
+
+    proxy_string = parts[1].strip()
+    change_ip_url = parts[2].strip()
+    if '@' not in proxy_string or proxy_string.count(':') < 2:
+        bot.reply_to(message, "❌ Неверный формат прокси.")
+        return
+    if not change_ip_url.startswith(("http://", "https://")):
+        bot.reply_to(message, "❌ change_ip_url должен начинаться с http:// или https://")
+        return
+
+    try:
+        from mobile_proxy_manager import proxy_manager
+        proxy_manager.add_proxy(proxy_string, proxy_type="mobile", change_ip_url=change_ip_url)
+        bot.reply_to(message, "✅ Mobile proxy успешно добавлен!")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка при добавлении mobile proxy: {str(e)}")
 
 @bot.message_handler(commands=['proxy_status'])
 def proxy_status_command(message):
@@ -164,16 +197,17 @@ def proxy_status_command(message):
             bot.reply_to(message, "📊 Нет мобильных прокси в базе")
             return
         
-        status_text = "📊 *Статус мобильных прокси:*\n\n"
+        status_text = "📊 *Статус прокси:*\n\n"
         
         for proxy in proxies:
-            proxy_string, is_active, success_count, fail_count, last_fail_reason = proxy
+            proxy_string, is_active, success_count, fail_count, last_fail_reason, proxy_type, change_ip_url, last_ip_change, ip_change_count = proxy
             proxy_masked = _mask_proxy_for_display(proxy_string)
             status = "✅ Активен" if is_active else "❌ Отключен"
             status_text += (
                 f"• `{proxy_masked}`\n"
-                f"  Статус: {status}\n"
+                f"  Тип: `{proxy_type or 'server'}` | Статус: {status}\n"
                 f"  Успешно: {success_count}, Ошибок: {fail_count}\n"
+                f"  Change IP: {'есть' if change_ip_url else '-'} | Смен IP: {ip_change_count or 0}\n"
             )
             if last_fail_reason:
                 status_text += f"  Последняя ошибка: {last_fail_reason}\n"
@@ -205,13 +239,15 @@ def channels_status_command(message):
 
         status_text = "📊 *Parser channels:*\n\n"
         for channel in channels:
-            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date = channel
+            channel_id, proxy_string, spfa_id, impersonate, status, cooldown_until, success_count, fail_count, last_error, updated_date, proxy_type, change_ip_url, last_ip_change, ip_change_count = channel
             proxy_masked = _mask_proxy_for_display(proxy_string)
             status_text += (
                 f"#{channel_id} `{proxy_masked}`\n"
-                f"Статус: `{status}` | SPFA ID: `{spfa_id or '-'}` | TLS: `{impersonate or '-'}`\n"
+                f"Тип: `{proxy_type or 'server'}` | Статус: `{status}` | SPFA ID: `{spfa_id or '-'}` | TLS: `{impersonate or '-'}`\n"
                 f"Успешно: `{success_count}` | Ошибок: `{fail_count}`\n"
             )
+            if proxy_type == 'mobile':
+                status_text += f"Change IP: `{'есть' if change_ip_url else '-'}` | Смен IP: `{ip_change_count or 0}`\n"
             if cooldown_until:
                 status_text += f"Cooldown до: `{cooldown_until}`\n"
             if last_error:
@@ -311,7 +347,7 @@ def _run_channel_diagnostic(channel_id: int) -> str:
 
     lines = [
         f"Channel #{channel.id}: {_mask_proxy_for_display(channel.proxy_string)}",
-        f"TLS: {channel.impersonate or '-'} | SPFA: {channel.spfa_id or '-'}",
+        f"Type: {channel.proxy_type} | TLS: {channel.impersonate or '-'} | SPFA: {channel.spfa_id or '-'}",
     ]
 
     for name, url, cookies in checks:
