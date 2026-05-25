@@ -74,6 +74,7 @@ class ChannelManager:
         self._add_env_proxy()
         self._ensure_channels_for_active_proxies()
         self._clear_expired_cookies_for_all_channels()
+        self._clear_cookies_for_blocked_channels()
         self._sync_channel_status_for_proxy_activity()
 
     def acquire_channel(self) -> Optional[ParserChannel]:
@@ -368,6 +369,33 @@ class ChannelManager:
                 logger.warning(f"Очищены просроченные SPFA cookies в {cursor.rowcount} channel(s).")
             conn.commit()
 
+    def _clear_cookies_for_blocked_channels(self):
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.execute('''
+                UPDATE parser_channels
+                SET spfa_id = NULL,
+                    cookies_json = NULL,
+                    user_agent = NULL,
+                    cookie_status = 'poisoned',
+                    cookie_error = 'Cleared after blocked response',
+                    last_purchase_at = NULL,
+                    last_cookie_clear_at = ?,
+                    last_warmup_at = 0,
+                    next_available_at = NULL,
+                    updated_date = CURRENT_TIMESTAMP
+                WHERE cookies_json IS NOT NULL
+                  AND last_error IS NOT NULL
+                  AND (
+                    last_error LIKE '%403%'
+                    OR last_error LIKE '%429%'
+                    OR lower(last_error) LIKE '%captcha%'
+                    OR last_error LIKE '%капч%'
+                  )
+            ''', (time.time(),))
+            if cursor.rowcount:
+                logger.warning(f"Очищены cookies после блокировок в {cursor.rowcount} channel(s).")
+            conn.commit()
+
     def _sync_channel_status_for_proxy_activity(self):
         with sqlite3.connect(self.db_name) as conn:
             conn.execute('''
@@ -504,6 +532,15 @@ class ChannelManager:
 
     @staticmethod
     def _cooldown_minutes(reason: str, fail_count: int, default_minutes: int) -> int:
+        reason_lower = reason.lower()
+        if "captcha" in reason_lower or "капч" in reason_lower or "подозрительную активность" in reason_lower:
+            if fail_count <= 1:
+                return max(default_minutes, 60)
+            if fail_count == 2:
+                return max(default_minutes, 180)
+            return max(default_minutes, 360)
+        if "firewall" in reason_lower or "проблема с ip" in reason_lower:
+            return max(default_minutes, 60)
         if "403" not in reason:
             return default_minutes
         if fail_count <= 1:
@@ -524,6 +561,11 @@ class ChannelManager:
 
     @staticmethod
     def _status_code_from_reason(reason: str) -> int | None:
+        reason_lower = reason.lower()
+        if "captcha" in reason_lower or "капч" in reason_lower:
+            return 429
+        if "firewall" in reason_lower or "проблема с ip" in reason_lower:
+            return 403
         if "403" in reason:
             return 403
         if "429" in reason:

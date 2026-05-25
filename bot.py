@@ -1372,6 +1372,15 @@ def run_test_parser(user_id, config, chat_id):
     try:
         # Создаем обработчик для отправки уведомлений администратору
         tg_handler = UserTgHandler(user_id, bot)
+        found_ads = []
+        original_send_to_tg = tg_handler.send_to_tg
+
+        def track_send_to_tg(ad=None, msg=None):
+            if ad:
+                found_ads.append(ad)
+            original_send_to_tg(ad=ad, msg=msg)
+
+        tg_handler.send_to_tg = track_send_to_tg
         
         # Создаем событие остановки
         stop_event = threading.Event()
@@ -1397,14 +1406,23 @@ def run_test_parser(user_id, config, chat_id):
             stop_event.set()
             parse_thread.join(timeout=10)
         
-        # Отправляем сообщение о завершении
-        bot.send_message(
-            chat_id,
-            "✅ *Тестовый парсинг завершен!*\n\n"
-            "Если вы получили уведомления о новых объявлениях - парсер работает корректно.\n"
-            "Тестовые данные были автоматически удалены.",
-            parse_mode='Markdown'
-        )
+        channel_id = parser.current_channel.id if parser.current_channel else '-'
+        if found_ads:
+            result_message = (
+                "✅ *Тестовый парсинг завершен успешно!*\n\n"
+                f"Найдено и отправлено объявлений: `{len(found_ads)}`\n"
+                f"Channel: `{channel_id}` | Good: `{parser.good_request_count}` | Bad: `{parser.bad_request_count}`\n"
+                "Тестовые данные были автоматически удалены."
+            )
+        else:
+            result_message = (
+                "⚠️ *Тестовый парсинг завершен без объявлений.*\n\n"
+                f"Причина: `{parser.last_failure_reason or 'NO_ADS'}`\n"
+                f"Channel: `{channel_id}` | Good: `{parser.good_request_count}` | Bad: `{parser.bad_request_count}`\n"
+                "Проверьте `/health` и `/channels_status`."
+            )
+
+        bot.send_message(chat_id, result_message, parse_mode='Markdown')
         
         # Удаляем тестовую ссылку
         with sqlite3.connect(db.db_name) as conn:
@@ -1542,8 +1560,11 @@ def run_simple_user_test_parser(user_id, config, chat_id):
             
             result_message += "\n\n💎 *Хочешь больше?*\nПриобрети подписку и настрой парсер под свои нужды!"
         else:
+            channel_id = parser.current_channel.id if parser.current_channel else '-'
             result_message = (
                 "⚠️ *Тестовый парсинг завершен, но объявления не найдены.*\n\n"
+                f"Диагностика: `{parser.last_failure_reason or 'NO_ADS'}`\n"
+                f"Channel: `{channel_id}` | Good: `{parser.good_request_count}` | Bad: `{parser.bad_request_count}`\n\n"
                 "Возможные причины:\n"
                 "• Нет новых объявлений по заданным критериям\n"
                 "• Все объявления уже были просмотрены ранее\n"

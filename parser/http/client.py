@@ -148,14 +148,26 @@ class AvitoHttpClient:
             )
         
         # Проверка по содержимому (Firewall, Captcha)
-        html = response.text
-        if "Доступ ограничен" in html or "проблема с IP" in html:
+        html = response.text or ""
+        text = html.lower()
+        if (
+            "доступ ограничен" in text
+            or "проблема с ip" in text
+            or "доступ с вашего ip" in text
+            or "ваш ip" in text and "огранич" in text
+            or "too many requests" in text
+        ):
             raise BlockError(
                 "Cloudflare / Avito Firewall: проблема с IP",
                 status_code=response.status_code,
                 response_cookies=self._extract_cookies(response),
             )
-        if "Ой! Мы заметили подозрительную активность" in html or "Подтвердите, что вы не робот" in html:
+        if (
+            "ой! мы заметили подозрительную активность" in text
+            or "подтвердите, что вы не робот" in text
+            or "captcha" in text
+            or "капч" in text
+        ):
             raise BlockError(
                 "Avito Captcha: Требуется разгадать капчу",
                 status_code=response.status_code,

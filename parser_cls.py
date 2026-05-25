@@ -166,11 +166,13 @@ class AvitoParse:
                         no_cookie_html = self._try_fetch_without_cookies(clean_channel, url)
                         if no_cookie_html is not None:
                             logger.info("Stored cookies caused block, same channel works without cookies.")
+                            self.good_request_count += 1
+                            self.last_failure_reason = None
                             self.channel_manager.mark_success(clean_channel)
                             return no_cookie_html
                     channel = clean_channel
 
-                if block_retries > 0 and self.channel_manager.handle_block(channel, reason):
+                if block_retries > 0 and not self._is_captcha_or_firewall(reason) and self.channel_manager.handle_block(channel, reason):
                     logger.info("Канал обработал блокировку. Повторяем запрос...")
                     return self.fetch_data(url, block_retries=block_retries - 1)
 
@@ -232,6 +234,11 @@ class AvitoParse:
             return None
 
     @staticmethod
+    def _is_captcha_or_firewall(reason: str) -> bool:
+        text = (reason or "").lower()
+        return "captcha" in text or "капч" in text or "firewall" in text or "проблема с ip" in text
+
+    @staticmethod
     def _is_challenge_page(html_code: str) -> bool:
         text = BeautifulSoup(html_code or "", "html.parser").get_text(" ", strip=True).lower()
         return (
@@ -281,14 +288,11 @@ class AvitoParse:
             ads = self._parse_ads_from_dom(html_code=html_code)
             if not ads:
                 if self.channel_manager.api_client:
-                    if "catalog" in html_code:
+                    if catalog:
                         logger.error(f"HTML содержит catalog, но парсер не смог извлечь объявления: {err}")
                         return []
-                    if parse_retries > 0 and self.current_channel:
-                        self.channel_manager.refresh_cookies(self.current_channel)
-                        logger.info("Пустой ответ Avito. Cookies канала обновлены, повторяем парсинг...")
-                        return self.get_ads_from_url(url, parse_retries=parse_retries - 1)
-                    logger.error(f"Не удалось извлечь объявления без браузерного фолбэка: {err}")
+                    logger.error(f"Не удалось извлечь объявления из HTML Avito: {err}")
+                    self.last_failure_reason = "NO_ADS_EXTRACTED"
                     return []
                 rendered_html = self._get_manual_rendered_html(url)
                 ads = self._parse_ads_from_dom(html_code=rendered_html or "")
