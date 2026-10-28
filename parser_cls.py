@@ -143,12 +143,32 @@ class AvitoParse:
                 referer="https://www.avito.ru/",
                 retries=self.config.max_count_of_retry
             )
+            if self._is_vpn_soft_block_page(result.text):
+                raise BlockError(
+                    "Avito Soft Block: страница с просьбой отключить VPN/прокси",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
             if self._is_challenge_page(result.text):
                 raise BlockError(
                     "Avito Captcha: Требуется разгадать капчу",
                     status_code=result.status_code,
                     response_cookies=result.cookies,
                 )
+
+            # Soft block: Avito вернул оболочку сайта, но без объявлений
+            # Проверяем только для страниц категорий/поиска (не для главной)
+            is_listing_url = url.count("/") > 3 and "avito" in url
+            if (is_listing_url and
+                "data-marker=" in result.text and
+                'data-marker="item"' not in result.text and
+                "iva-item-root" not in result.text):
+                raise BlockError(
+                    "Avito Soft Block: страница без объявлений (блок IP/прокси)",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
+
             self.good_request_count += 1
             self.last_failure_reason = None
             if channel:
@@ -163,6 +183,30 @@ class AvitoParse:
             reason = str(e)
             self.last_failure_reason = reason
             logger.warning(f"Блокировка Avito: {reason}")
+
+            # Captcha solving integration
+            if self._is_captcha_or_firewall(reason) and block_retries > 0:
+                from parser.captcha import CaptchaSolver
+                if CaptchaSolver.is_configured():
+                    logger.info("Пытаемся решить капчу через CaptchaSolver...")
+                    solver = CaptchaSolver(proxy=proxy)
+                    solution = solver.solve()
+                    if solution:
+                        verify_session_cookies = dict(cookies or {})
+                        if e.response_cookies:
+                            verify_session_cookies.update(e.response_cookies)
+                        verify_ok, verify_cookies = solver.verify_with_avito(
+                            solution,
+                            session_cookies=verify_session_cookies,
+                            proxy=proxy,
+                            headers={"User-Agent": user_agent} if user_agent else None,
+                        )
+                        if verify_ok:
+                            logger.info("Капча решена! Повторяем запрос...")
+                            if channel and verify_cookies:
+                                self.channel_manager.update_cookies(channel, verify_cookies)
+                                channel = self.channel_manager.get_channel(channel.id) or channel
+                            return self.fetch_data(url, block_retries=block_retries - 1)
 
             if channel:
                 if used_cookies:
@@ -234,9 +278,25 @@ class AvitoParse:
                 retries=1,
                 timeout=20,
             )
+            if self._is_vpn_soft_block_page(result.text):
+                raise BlockError(
+                    "Avito Soft Block: страница с просьбой отключить VPN/прокси",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
             if self._is_challenge_page(result.text):
                 raise BlockError(
                     "Avito Captcha: Требуется разгадать капчу",
+                    status_code=result.status_code,
+                    response_cookies=result.cookies,
+                )
+            # Soft block check for no-cookie retry (URL контекст уже проверен caller'ом)
+            if (len(result.text) < 500000 and
+                "data-marker=" in result.text and
+                'data-marker="item"' not in result.text and
+                "iva-item-root" not in result.text):
+                raise BlockError(
+                    "Avito Soft Block: страница без объявлений",
                     status_code=result.status_code,
                     response_cookies=result.cookies,
                 )
@@ -251,8 +311,39 @@ class AvitoParse:
         return "captcha" in text or "капч" in text or "firewall" in text or "проблема с ip" in text
 
     @staticmethod
-    def _is_challenge_page(html_code: str) -> bool:
+    def _is_vpn_soft_block_page(html_code: str) -> bool:
         text = BeautifulSoup(html_code or "", "html.parser").get_text(" ", strip=True).lower()
+        return (
+            (("vpn" in text or "впн" in text) and ("отключ" in text or "выключ" in text))
+            or ("анонимайзер" in text and ("отключ" in text or "выключ" in text))
+        )
+
+    @staticmethod
+    def _is_challenge_page(html_code: str) -> bool:
+        if not html_code:
+            return False
+
+        # High-specificity HTML markers — captcha page has these elements
+        has_captcha_marker = (
+            "gcaptcha4" in html_code
+            or "geevisit" in html_code
+            or "firewallCaptcha" in html_code
+            or 'id="captcha"' in html_code
+            or 'class="captcha"' in html_code
+        )
+        if has_captcha_marker:
+            return True
+
+        # If page has actual listing items, it's not a challenge page
+        if 'data-marker="item"' in html_code or "iva-item-root" in html_code:
+            return False
+
+        # Heuristic: captcha pages are small, listing pages are large
+        if len(html_code) > 200000:
+            return False
+
+        # Fallback text check for incomplete/missing markers
+        text = BeautifulSoup(html_code, "html.parser").get_text(" ", strip=True).lower()
         return (
             ("проблем" in text and "ip" in text)
             or "доступ ограничен" in text
@@ -263,7 +354,7 @@ class AvitoParse:
             or "подозрительную активность" in text
             or "подтвердите, что вы не робот" in text
             or "докажите" in text
-            or "проверка" in text and "безопас" in text
+            or ("проверка" in text and "безопас" in text)
             or "too many requests" in text
         )
 
@@ -306,17 +397,13 @@ class AvitoParse:
         except ValidationError as err:
             ads = self._parse_ads_from_dom(html_code=html_code)
             if not ads:
-                if self.channel_manager.api_client:
-                    if catalog:
-                        logger.error(f"HTML содержит catalog, но парсер не смог извлечь объявления: {err}")
-                        self.last_failure_reason = "CATALOG_SCHEMA_MISMATCH"
-                        return []
-                    logger.error(f"Не удалось извлечь объявления из HTML Avito: {err}")
-                    self.last_failure_reason = "NO_ADS_EXTRACTED"
-                    return []
                 rendered_html = self._get_manual_rendered_html(url)
                 ads = self._parse_ads_from_dom(html_code=rendered_html or "")
                 if not ads:
+                    if catalog:
+                        self.last_failure_reason = "CATALOG_SCHEMA_MISMATCH"
+                    else:
+                        self.last_failure_reason = "NO_ADS_EXTRACTED"
                     logger.error(f"При валидации объявлений произошла ошибка: {err}")
                     return []
 

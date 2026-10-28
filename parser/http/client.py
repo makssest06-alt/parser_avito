@@ -149,12 +149,47 @@ class AvitoHttpClient:
         
         # Проверка по содержимому (Firewall, Captcha)
         html = response.text or ""
+
+        if self._is_vpn_soft_block(html):
+            raise BlockError(
+                "Avito Soft Block: страница с просьбой отключить VPN/прокси",
+                status_code=response.status_code,
+                response_cookies=self._extract_cookies(response),
+            )
+
+        # High-specificity HTML markers — captcha/firewall page has these elements
+        if (
+            "gcaptcha4" in html
+            or "geevisit" in html
+            or "firewallCaptcha" in html
+        ):
+            raise BlockError(
+                "Avito Captcha: Требуется разгадать капчу",
+                status_code=response.status_code,
+                response_cookies=self._extract_cookies(response),
+            )
+
+        # If page has actual listing content, skip further detection
+        if 'data-marker="item"' in html or "iva-item-root" in html:
+            return
+
+        if self._is_listing_url(str(response.url)) and "data-marker=" in html:
+            raise BlockError(
+                "Avito Soft Block: страница без объявлений (возможен VPN/прокси блок)",
+                status_code=response.status_code,
+                response_cookies=self._extract_cookies(response),
+            )
+
+        # Size heuristic: captcha/firewall pages are small, listing pages are large
+        if len(html) > 200000:
+            return
+
         text = html.lower()
         if (
             "доступ ограничен" in text
             or "проблема с ip" in text
             or "доступ с вашего ip" in text
-            or "ваш ip" in text and "огранич" in text
+            or ("ваш ip" in text and "огранич" in text)
             or "too many requests" in text
         ):
             raise BlockError(
@@ -173,6 +208,19 @@ class AvitoHttpClient:
                 status_code=response.status_code,
                 response_cookies=self._extract_cookies(response),
             )
+
+    @staticmethod
+    def _is_vpn_soft_block(html: str) -> bool:
+        text = (html or "").lower()
+        return (
+            (("vpn" in text or "впн" in text) and ("отключ" in text or "выключ" in text))
+            or ("анонимайзер" in text and ("отключ" in text or "выключ" in text))
+        )
+
+    @staticmethod
+    def _is_listing_url(url: str) -> bool:
+        path = urlparse(url or "").path.strip("/")
+        return bool(path and path.count("/") >= 1)
 
     @staticmethod
     def _extract_cookies(response) -> dict:

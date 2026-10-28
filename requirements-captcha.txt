@@ -1,0 +1,9 @@
+# GeekedTest dependencies for captcha solving
+opencv-python>=4.9
+numpy>=1.24
+pycryptodome>=3.20
+curl_cffi>=0.13
+
+# Optional: GPU acceleration for inference
+# torch>=2.6.0+cu124
+# torchvision>=0.21.0+cu124
